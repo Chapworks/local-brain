@@ -24,6 +24,7 @@ import {
   COOKIE_NAME,
 } from "./auth.ts";
 import { parseImport } from "../import-parsers.ts";
+import { isValidWebhookUrl } from "../digest.ts";
 
 // --- Page renderers ---
 import { LoginPage } from "./pages/login.tsx";
@@ -47,7 +48,8 @@ import {
 import type { Notification } from "../notifications.ts";
 
 // Known .env keys and their sections for the config editor
-const CONFIG_SCHEMA: { key: string; section: string; secret: boolean }[] = [
+// CR-07: Keys allowed in config editor. readonly keys are shown but not editable.
+const CONFIG_SCHEMA: { key: string; section: string; secret: boolean; readonly?: boolean }[] = [
   { key: "DB_PASSWORD", section: "Database", secret: true },
   { key: "MCP_ACCESS_KEY", section: "MCP Authentication", secret: true },
   { key: "CLOUDFLARE_TUNNEL_TOKEN", section: "Cloudflare Tunnel", secret: true },
@@ -58,7 +60,7 @@ const CONFIG_SCHEMA: { key: string; section: string; secret: boolean }[] = [
   { key: "CHAT_API_KEY", section: "AI Provider", secret: true },
   { key: "CHAT_MODEL", section: "AI Provider", secret: false },
   { key: "CHAT_API_FORMAT", section: "AI Provider", secret: false },
-  { key: "ADMIN_JWT_SECRET", section: "Admin", secret: true },
+  { key: "ADMIN_JWT_SECRET", section: "Admin", secret: true, readonly: true },
   { key: "ADMIN_ACCESS_MODE", section: "Admin", secret: false },
   { key: "DIGEST_TIMEZONE", section: "Digests", secret: false },
   { key: "BACKUP_CRON", section: "Backups", secret: false },
@@ -74,9 +76,18 @@ const CONFIG_SCHEMA: { key: string; section: string; secret: boolean }[] = [
   { key: "RCLONE_CONFIG_REMOTE_REGION", section: "Backups — Cloud", secret: false },
 ];
 
+// CR-07: Only these keys may be written via the config editor
+const WRITABLE_CONFIG_KEYS = new Set(
+  CONFIG_SCHEMA.filter((e) => !e.readonly).map((e) => e.key)
+);
+
 const DOCKER_API = Deno.env.get("DOCKER_API_URL") || "http://docker-proxy:2375";
 const COMPOSE_SERVICES = ["postgres", "mcp-server", "tunnel", "docker-proxy", "db-backup"];
 const ENV_PATH = "/app/.env";
+const ACCESS_MODE = Deno.env.get("ADMIN_ACCESS_MODE") || "local";
+
+const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10 MB (CR-10)
+const MAX_IMPORT_THOUGHTS = 1000; // CR-10
 
 // --- Helpers ---
 
@@ -98,8 +109,14 @@ async function readEnvFile(): Promise<Record<string, string>> {
   }
 }
 
-/** Write the .env file preserving comments and order. */
+/** Write the .env file preserving comments and order. CR-07: Only writable keys are accepted. */
 async function writeEnvFile(updates: Record<string, string>): Promise<void> {
+  // Filter out any keys not in the writable set
+  for (const key of Object.keys(updates)) {
+    if (!WRITABLE_CONFIG_KEYS.has(key)) {
+      delete updates[key];
+    }
+  }
   let text: string;
   try {
     text = await Deno.readTextFile(ENV_PATH);
@@ -258,13 +275,31 @@ async function getBrainUsers(pool: Pool): Promise<
   }
 }
 
-// --- Rate limiter for login ---
+// --- Rate limiter for login (CR-09: correct IP source, CR-15: periodic cleanup) ---
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 60_000;
 
+/** Get the real client IP based on access mode. */
+function getClientIp(c: { req: { header: (name: string) => string | undefined } }): string {
+  if (ACCESS_MODE === "remote") {
+    // Through Cloudflare Tunnel, trust only cf-connecting-ip
+    return c.req.header("cf-connecting-ip") || "unknown";
+  }
+  // In local mode, don't trust forwarded headers (CR-09)
+  return "localhost";
+}
+
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
+
+  // CR-15: Clean up expired entries every 100 checks
+  if (loginAttempts.size > 100) {
+    for (const [k, v] of loginAttempts) {
+      if (now > v.resetAt) loginAttempts.delete(k);
+    }
+  }
+
   const entry = loginAttempts.get(ip);
   if (!entry || now > entry.resetAt) {
     loginAttempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
@@ -273,6 +308,12 @@ function checkRateLimit(ip: string): boolean {
   if (entry.count >= MAX_ATTEMPTS) return false;
   entry.count++;
   return true;
+}
+
+/** CR-14: Validate redirect target is local. */
+function safeRedirect(referer: string | undefined): string {
+  if (referer && referer.startsWith("/admin")) return referer;
+  return "/admin";
 }
 
 // --- Build the Hono sub-app ---
@@ -313,8 +354,7 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/login", async (c) => {
-    const ip =
-      c.req.header("x-forwarded-for") || c.req.header("cf-connecting-ip") || "unknown";
+    const ip = getClientIp(c);
     if (!checkRateLimit(ip)) {
       return c.html(
         (<LoginPage error="Too many attempts. Try again in a minute." />) as unknown as string,
@@ -360,7 +400,7 @@ export function createAdminApp(pool: Pool): Hono {
     const token = await createToken(username);
     setCookie(c, COOKIE_NAME, token, {
       httpOnly: true,
-      secure: true,
+      secure: ACCESS_MODE === "remote", // CR-19: allow HTTP on localhost
       sameSite: "Lax",
       path: "/admin",
       maxAge: 7 * 24 * 60 * 60,
@@ -383,15 +423,13 @@ export function createAdminApp(pool: Pool): Hono {
     if (id) {
       await dismissNotification(pool, id, user);
     }
-    const referer = c.req.header("referer") || "/admin";
-    return c.redirect(referer);
+    return c.redirect(safeRedirect(c.req.header("referer")));
   });
 
   admin.post("/notifications/dismiss-all", async (c) => {
     const user = c.get("user") as string;
     await dismissAll(pool, user);
-    const referer = c.req.header("referer") || "/admin";
-    return c.redirect(referer);
+    return c.redirect(safeRedirect(c.req.header("referer")));
   });
 
   // --- Dashboard ---
@@ -401,42 +439,41 @@ export function createAdminApp(pool: Pool): Hono {
     const client = await pool.connect();
 
     try {
-      const countResult = await client.queryObject<{ count: number; archived: number }>(
+      // CR-20: Use SQL aggregation instead of loading all rows into memory
+      const countResult = await client.queryObject<{ count: number; archived: number; min_date: string | null; max_date: string | null }>(
         `SELECT
           COUNT(*) FILTER (WHERE archived = FALSE)::int AS count,
-          COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived
+          COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived,
+          MIN(created_at) FILTER (WHERE archived = FALSE)::text AS min_date,
+          MAX(created_at) FILTER (WHERE archived = FALSE)::text AS max_date
          FROM thoughts`
       );
 
-      const metaResult = await client.queryObject<{
-        metadata: Record<string, unknown>;
-        created_at: string;
-      }>("SELECT metadata, created_at FROM thoughts WHERE archived = FALSE ORDER BY created_at DESC");
-
       const total = countResult.rows[0]?.count || 0;
       const archived = countResult.rows[0]?.archived || 0;
-      const data = metaResult.rows;
+      const minDate = countResult.rows[0]?.min_date;
+      const maxDate = countResult.rows[0]?.max_date;
+      const dateRange = minDate && maxDate
+        ? `${new Date(minDate).toLocaleDateString()} → ${new Date(maxDate).toLocaleDateString()}`
+        : "";
 
+      // Types via SQL aggregation
+      const typesResult = await client.queryObject<{ type: string; count: number }>(
+        `SELECT metadata->>'type' AS type, COUNT(*)::int AS count
+         FROM thoughts WHERE archived = FALSE AND metadata->>'type' IS NOT NULL
+         GROUP BY metadata->>'type' ORDER BY count DESC`
+      );
       const types: Record<string, number> = {};
-      const topics: Record<string, number> = {};
+      for (const r of typesResult.rows) types[r.type] = r.count;
 
-      for (const r of data) {
-        const m = r.metadata || {};
-        if (m.type)
-          types[m.type as string] = (types[m.type as string] || 0) + 1;
-        if (Array.isArray(m.topics))
-          for (const t of m.topics)
-            topics[t as string] = (topics[t as string] || 0) + 1;
-      }
-
-      const topTopics = Object.entries(topics)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
-
-      const dateRange =
-        data.length > 0
-          ? `${new Date(data[data.length - 1].created_at).toLocaleDateString()} → ${new Date(data[0].created_at).toLocaleDateString()}`
-          : "";
+      // Top topics via SQL aggregation
+      const topTopicsResult = await client.queryObject<{ topic: string; count: number }>(
+        `SELECT t.topic, COUNT(*)::int AS count
+         FROM thoughts, jsonb_array_elements_text(metadata->'topics') AS t(topic)
+         WHERE archived = FALSE
+         GROUP BY t.topic ORDER BY count DESC LIMIT 10`
+      );
+      const topTopics = topTopicsResult.rows.map((r) => [r.topic, r.count] as [string, number]);
 
       // Service health from Docker
       const containers = await getContainers();
@@ -619,10 +656,10 @@ export function createAdminApp(pool: Pool): Hono {
 
     const client = await pool.connect();
     try {
-      if (days > 0) {
+      if (days > 0 && days <= 3650) {
         await client.queryObject(
-          `UPDATE thoughts SET expires_at = CURRENT_TIMESTAMP + INTERVAL '${days} days' WHERE id = $1`,
-          [thoughtId]
+          `UPDATE thoughts SET expires_at = CURRENT_TIMESTAMP + make_interval(days => $2) WHERE id = $1`,
+          [thoughtId, days]
         );
       } else {
         await client.queryObject(
@@ -863,6 +900,33 @@ export function createAdminApp(pool: Pool): Hono {
     }
 
     const fileObj = file as unknown as File;
+
+    // CR-10: Enforce import file size limit
+    if (fileObj.size > MAX_IMPORT_SIZE) {
+      const client = await pool.connect();
+      try {
+        const countResult = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM thoughts"
+        );
+        const usersResult = await client.queryObject<{ id: number; name: string }>(
+          "SELECT id, name FROM brain_users ORDER BY name"
+        );
+        return c.html(
+          (
+            <ImportExportPage
+              user={user}
+              notifications={notifs(c)} version={APP_VERSION}
+              thoughtCount={countResult.rows[0]?.count || 0}
+              brainUsers={usersResult.rows}
+              flash={{ type: "error", message: `File too large (${(fileObj.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${MAX_IMPORT_SIZE / 1024 / 1024} MB.` }}
+            />
+          ) as unknown as string
+        );
+      } finally {
+        client.release();
+      }
+    }
+
     const text = await fileObj.text();
     const filename = fileObj.name || "import.txt";
 
@@ -886,6 +950,32 @@ export function createAdminApp(pool: Pool): Hono {
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
               flash={{ type: "error", message: `Parse error: ${(err as Error).message}` }}
+            />
+          ) as unknown as string
+        );
+      } finally {
+        client.release();
+      }
+    }
+
+    // CR-10: Enforce thought count limit
+    if (thoughts.length > MAX_IMPORT_THOUGHTS) {
+      const client = await pool.connect();
+      try {
+        const countResult = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM thoughts"
+        );
+        const usersResult = await client.queryObject<{ id: number; name: string }>(
+          "SELECT id, name FROM brain_users ORDER BY name"
+        );
+        return c.html(
+          (
+            <ImportExportPage
+              user={user}
+              notifications={notifs(c)} version={APP_VERSION}
+              thoughtCount={countResult.rows[0]?.count || 0}
+              brainUsers={usersResult.rows}
+              flash={{ type: "error", message: `File contains ${thoughts.length} thoughts. Maximum is ${MAX_IMPORT_THOUGHTS} per import.` }}
             />
           ) as unknown as string
         );
@@ -1025,7 +1115,7 @@ export function createAdminApp(pool: Pool): Hono {
     const frequency = String(body.frequency || "daily");
     const webhookUrl = String(body.webhook_url || "").trim();
 
-    if (!webhookUrl) {
+    if (!webhookUrl || !isValidWebhookUrl(webhookUrl)) {
       return c.redirect("/admin/digests");
     }
 
@@ -1300,6 +1390,8 @@ export function createAdminApp(pool: Pool): Hono {
     const updates: Record<string, string> = {};
 
     for (const entry of CONFIG_SCHEMA) {
+      // CR-07: Skip readonly keys — they cannot be changed via the UI
+      if (entry.readonly) continue;
       const newValue = String(body[entry.key] || "").trim();
       // Skip blank secret fields (keep current value)
       if (entry.secret && !newValue) continue;

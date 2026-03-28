@@ -150,7 +150,9 @@ export async function getUsageSummary(
     }
 
     if (opts.days) {
-      conditions.push(`created_at >= NOW() - INTERVAL '${opts.days} days'`);
+      conditions.push(`created_at >= NOW() - make_interval(days => $${paramIdx})`);
+      params.push(opts.days);
+      paramIdx++;
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";

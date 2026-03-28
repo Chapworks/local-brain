@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { formatDigest } from "./digest.ts";
+import { formatDigest, isValidWebhookUrl } from "./digest.ts";
 
 // --- formatDigest ---
 
@@ -155,4 +155,54 @@ Deno.test("formatDigest — multiple action items", () => {
   assertEquals(result.includes("• Task A"), true);
   assertEquals(result.includes("• Task B"), true);
   assertEquals(result.includes("• Task C"), true);
+});
+
+// --- isValidWebhookUrl (CR-06) ---
+
+Deno.test("isValidWebhookUrl — accepts valid HTTPS URLs", () => {
+  assertEquals(isValidWebhookUrl("https://hooks.slack.com/services/T123/B456"), true);
+  assertEquals(isValidWebhookUrl("https://discord.com/api/webhooks/123/abc"), true);
+  assertEquals(isValidWebhookUrl("https://example.com/webhook"), true);
+});
+
+Deno.test("isValidWebhookUrl — rejects HTTP (non-TLS)", () => {
+  assertEquals(isValidWebhookUrl("http://example.com/webhook"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects localhost", () => {
+  assertEquals(isValidWebhookUrl("https://localhost/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://127.0.0.1/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://[::1]/webhook"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects private IP ranges", () => {
+  assertEquals(isValidWebhookUrl("https://10.0.0.1/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://192.168.1.1/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://172.16.0.1/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://172.31.255.255/webhook"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects metadata endpoint", () => {
+  assertEquals(isValidWebhookUrl("https://169.254.169.254/latest/meta-data"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects .local and .internal domains", () => {
+  assertEquals(isValidWebhookUrl("https://myhost.local/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://service.internal/webhook"), false);
+  assertEquals(isValidWebhookUrl("https://metadata.google.internal/computeMetadata"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects 0.0.0.0", () => {
+  assertEquals(isValidWebhookUrl("https://0.0.0.0/webhook"), false);
+});
+
+Deno.test("isValidWebhookUrl — rejects invalid URLs", () => {
+  assertEquals(isValidWebhookUrl("not-a-url"), false);
+  assertEquals(isValidWebhookUrl(""), false);
+  assertEquals(isValidWebhookUrl("ftp://example.com/file"), false);
+});
+
+Deno.test("isValidWebhookUrl — allows 172.x outside private range", () => {
+  assertEquals(isValidWebhookUrl("https://172.32.0.1/webhook"), true);
+  assertEquals(isValidWebhookUrl("https://172.15.0.1/webhook"), true);
 });

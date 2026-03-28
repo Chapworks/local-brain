@@ -5,9 +5,18 @@
 import * as bcrypt from "bcrypt";
 import { SignJWT, jwtVerify } from "jose";
 
-const JWT_SECRET = new TextEncoder().encode(
-  Deno.env.get("ADMIN_JWT_SECRET") || "change-me"
-);
+// CR-05: Refuse to start with default/missing JWT secret
+const rawSecret = Deno.env.get("ADMIN_JWT_SECRET");
+if (!rawSecret || rawSecret === "change-me") {
+  console.error(
+    "FATAL: ADMIN_JWT_SECRET is not set or is the default value.\n" +
+    "Set a strong random secret in your .env file:\n" +
+    '  ADMIN_JWT_SECRET=$(openssl rand -hex 32)\n' +
+    "The admin panel will not work without this."
+  );
+  // Don't crash the MCP server — just make auth always fail
+}
+const JWT_SECRET = new TextEncoder().encode(rawSecret || crypto.randomUUID());
 const COOKIE_NAME = "lb_session";
 const TOKEN_EXPIRY = "7d";
 

@@ -24,6 +24,7 @@
  *   DIGEST_TIMEZONE - Timezone for digest scheduling (default: UTC)
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
@@ -40,6 +41,14 @@ import {
 } from "./usage.ts";
 import { userScope } from "./user-scope.ts";
 import type { ResolvedUser } from "./user-scope.ts";
+
+// --- Per-request user context (CR-01 fix: replaces unsafe global) ---
+const requestContext = new AsyncLocalStorage<{ user: ResolvedUser | null }>();
+
+/** Get the current request's user. Safe under concurrent requests. */
+function getCurrentUser(): ResolvedUser | null {
+  return requestContext.getStore()?.user ?? null;
+}
 
 // --- Version ---
 
@@ -87,20 +96,26 @@ const pool = new Pool({
 const userCache = new Map<string, { user: ResolvedUser; expiresAt: number }>();
 const USER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+/** Result of resolving an MCP access key. (CR-02 fix: discriminated union) */
+type ResolveResult =
+  | { kind: "user"; user: ResolvedUser }
+  | { kind: "global" }
+  | { kind: "invalid" };
+
 /**
  * Resolve an MCP access key to a brain user.
- * Falls back to the global MCP_ACCESS_KEY for backward compatibility (returns null user_id).
+ * Falls back to the global MCP_ACCESS_KEY for backward compatibility.
  */
-async function resolveUser(key: string): Promise<ResolvedUser | null> {
+async function resolveUser(key: string): Promise<ResolveResult> {
   // Check cache first
   const cached = userCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.user;
+    return { kind: "user", user: cached.user };
   }
 
   // Check global key (backward compat — no user scoping)
   if (MCP_ACCESS_KEY && key === MCP_ACCESS_KEY) {
-    return null;
+    return { kind: "global" };
   }
 
   // Look up by key prefix (first 8 chars) — check both primary and secondary keys
@@ -124,7 +139,7 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
       if (validPrimary) {
         const user = { id: row.id, name: row.name };
         userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
-        return user;
+        return { kind: "user", user };
       }
       // Check secondary key (for rotation)
       if (row.secondary_key_hash) {
@@ -132,7 +147,7 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
         if (validSecondary) {
           const user = { id: row.id, name: row.name };
           userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
-          return user;
+          return { kind: "user", user };
         }
       }
     }
@@ -140,7 +155,7 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
     client.release();
   }
 
-  return undefined as unknown as null; // Key not found — will be rejected
+  return { kind: "invalid" };
 }
 
 /**
@@ -149,11 +164,11 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
  */
 async function authenticateRequest(key: string): Promise<ResolvedUser | null> {
   const result = await resolveUser(key);
-  // resolveUser returns null for global key, undefined for not found
-  if (result === (undefined as unknown as null)) {
-    throw new Error("Invalid access key");
+  switch (result.kind) {
+    case "user": return result.user;
+    case "global": return null;
+    case "invalid": throw new Error("Invalid access key");
   }
-  return result;
 }
 
 // --- Embedding & Metadata Extraction ---
@@ -179,7 +194,7 @@ async function getEmbedding(text: string, operation = "embedding"): Promise<numb
   // Track usage
   const usage = extractOpenAIUsage(d, EMBEDDING_MODEL, operation);
   if (usage) {
-    logUsage(pool, { ...usage, userId: currentUser?.id || null }).catch(() => {});
+    logUsage(pool, { ...usage, userId: getCurrentUser()?.id || null }).catch(() => {});
   }
 
   return d.data[0].embedding;
@@ -214,7 +229,7 @@ async function extractMetadataOpenAI(text: string): Promise<Record<string, unkno
   // Track usage
   const usage = extractOpenAIUsage(d, CHAT_MODEL, "metadata");
   if (usage) {
-    logUsage(pool, { ...usage, userId: currentUser?.id || null }).catch(() => {});
+    logUsage(pool, { ...usage, userId: getCurrentUser()?.id || null }).catch(() => {});
   }
 
   return JSON.parse(d.choices[0].message.content);
@@ -242,7 +257,7 @@ async function extractMetadataAnthropic(text: string): Promise<Record<string, un
   // Track usage
   const usage = extractAnthropicUsage(d, CHAT_MODEL, "metadata");
   if (usage) {
-    logUsage(pool, { ...usage, userId: currentUser?.id || null }).catch(() => {});
+    logUsage(pool, { ...usage, userId: getCurrentUser()?.id || null }).catch(() => {});
   }
 
   return JSON.parse(d.content[0].text);
@@ -312,9 +327,6 @@ async function createThoughtLinks(
 
 // --- MCP Server Setup ---
 
-// Store user context per-request using a simple global (works because Deno.serve is async)
-let currentUser: ResolvedUser | null = null;
-
 const server = new McpServer({
   name: "local-brain",
   version: VERSION,
@@ -328,7 +340,7 @@ server.registerTool(
     description:
       "Search captured thoughts by meaning. Use this when the user asks about a topic, person, or idea they've previously captured.",
     inputSchema: {
-      query: z.string().describe("What to search for"),
+      query: z.string().max(10000).describe("What to search for"),
       limit: z.number().optional().default(10),
       threshold: z.number().optional().default(0.5),
       include_archived: z.boolean().optional().default(false).describe("Include archived thoughts in results"),
@@ -349,7 +361,7 @@ server.registerTool(
           conditions.push("archived = FALSE");
         }
 
-        const scope = userScope(currentUser, paramIdx);
+        const scope = userScope(getCurrentUser(), paramIdx);
         if (scope.params.length > 0) {
           conditions.push(scope.clause);
           params.push(...scope.params);
@@ -446,7 +458,7 @@ server.registerTool(
         conditions.push("archived = FALSE");
       }
 
-      const scope = userScope(currentUser, paramIdx);
+      const scope = userScope(getCurrentUser(), paramIdx);
       if (scope.params.length > 0) {
         conditions.push(scope.clause);
         params.push(...scope.params);
@@ -471,7 +483,9 @@ server.registerTool(
         paramIdx++;
       }
       if (days) {
-        conditions.push(`created_at >= NOW() - INTERVAL '${days} days'`);
+        conditions.push(`created_at >= NOW() - make_interval(days => $${paramIdx})`);
+        params.push(days);
+        paramIdx++;
       }
 
       const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -540,7 +554,7 @@ server.registerTool(
     try {
       const client = await pool.connect();
       try {
-        const scope = userScope(currentUser, 1);
+        const scope = userScope(getCurrentUser(), 1);
         const whereActive = `WHERE archived = FALSE AND ${scope.clause}`;
         const whereAll = `WHERE ${scope.clause}`;
 
@@ -608,7 +622,7 @@ server.registerTool(
         }
 
         // Connection stats
-        const userLinkClause = currentUser
+        const userLinkClause = getCurrentUser()
           ? `WHERE t.user_id = $1`
           : `WHERE t.user_id IS NULL`;
         const linkResult = await client.queryObject<{ count: number }>(
@@ -642,8 +656,8 @@ server.registerTool(
     description:
       "Save a new thought to Local Brain. Generates an embedding, extracts metadata, and links to related thoughts automatically.",
     inputSchema: {
-      content: z.string().describe("The thought to capture"),
-      expires_in_days: z.number().optional().describe("Auto-archive after this many days (null = never)"),
+      content: z.string().max(50000).describe("The thought to capture"),
+      expires_in_days: z.number().int().min(1).max(3650).optional().describe("Auto-archive after this many days (null = never)"),
     },
   },
   async ({ content, expires_in_days }) => {
@@ -659,16 +673,20 @@ server.registerTool(
       const client = await pool.connect();
       let thoughtId: number;
       try {
-        const expiresAt = expires_in_days
-          ? `NOW() + INTERVAL '${expires_in_days} days'`
-          : null;
+        const insertParams: unknown[] = [content, embStr, JSON.stringify(meta), getCurrentUser()?.id || null];
+        let insertSql: string;
+        if (expires_in_days) {
+          insertSql = `INSERT INTO thoughts (content, embedding, metadata, user_id, expires_at)
+           VALUES ($1, $2::vector, $3::jsonb, $4, NOW() + make_interval(days => $5))
+           RETURNING id`;
+          insertParams.push(expires_in_days);
+        } else {
+          insertSql = `INSERT INTO thoughts (content, embedding, metadata, user_id)
+           VALUES ($1, $2::vector, $3::jsonb, $4)
+           RETURNING id`;
+        }
 
-        const insertResult = await client.queryObject<{ id: number }>(
-          `INSERT INTO thoughts (content, embedding, metadata, user_id, expires_at)
-           VALUES ($1, $2::vector, $3::jsonb, $4, ${expiresAt ? expiresAt : 'NULL'})
-           RETURNING id`,
-          [content, embStr, JSON.stringify(meta), currentUser?.id || null]
-        );
+        const insertResult = await client.queryObject<{ id: number }>(insertSql, insertParams);
         thoughtId = insertResult.rows[0].id;
       } finally {
         client.release();
@@ -678,7 +696,7 @@ server.registerTool(
       const links = await createThoughtLinks(
         thoughtId,
         embedding,
-        currentUser?.id || null
+        getCurrentUser()?.id || null
       );
 
       let confirmation = `Captured as ${meta.type || "thought"} (ID: ${thoughtId})`;
@@ -727,10 +745,11 @@ server.registerTool(
       const client = await pool.connect();
       try {
         // Build user filter clause
-        const userClause = currentUser
+        const _user = getCurrentUser();
+        const userClause = _user
           ? `ts.user_id = $1`
           : `ts.user_id IS NULL`;
-        const baseParams: unknown[] = currentUser ? [currentUser.id] : [];
+        const baseParams: unknown[] = _user ? [_user.id] : [];
         const pOff = baseParams.length; // parameter offset
 
         if (thought_id) {
@@ -839,7 +858,7 @@ server.registerTool(
           conditions.push("archived = FALSE");
         }
 
-        const scope = userScope(currentUser, paramIdx);
+        const scope = userScope(getCurrentUser(), paramIdx);
         if (scope.params.length > 0) {
           conditions.push(scope.clause);
           params.push(...scope.params);
@@ -933,7 +952,7 @@ server.registerTool(
     try {
       const client = await pool.connect();
       try {
-        const scope = userScope(currentUser, 2);
+        const scope = userScope(getCurrentUser(), 2);
 
         const result = await client.queryObject(
           `UPDATE thoughts
@@ -985,7 +1004,7 @@ server.registerTool(
     try {
       const { getUsageSummary } = await import("./usage.ts");
       const summary = await getUsageSummary(pool, {
-        userId: currentUser?.id,
+        userId: getCurrentUser()?.id,
         days: days || undefined,
       });
 
@@ -1278,27 +1297,13 @@ try {
 
 const app = new Hono();
 
-// Health check — no auth required
+// Health check — no auth required (CR-13: minimal info, no operational details)
 app.get("/health", async (c) => {
   try {
     const client = await pool.connect();
     try {
-      const result = await client.queryObject<{ count: number; archived: number }>(
-        `SELECT
-          COUNT(*) FILTER (WHERE archived = FALSE)::int AS count,
-          COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived
-         FROM thoughts`
-      );
-      const userCount = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM brain_users WHERE is_active = TRUE"
-      );
-      return c.json({
-        status: "ok",
-        version: VERSION,
-        thoughts: result.rows[0]?.count || 0,
-        archived: result.rows[0]?.archived || 0,
-        users: userCount.rows[0]?.count || 0,
-      });
+      await client.queryObject("SELECT 1");
+      return c.json({ status: "ok", version: VERSION });
     } finally {
       client.release();
     }
@@ -1313,20 +1318,25 @@ app.route("/admin", admin);
 
 // MCP handler — catches everything else
 app.all("*", async (c) => {
-  const provided = c.req.header("x-brain-key") || new URL(c.req.url).searchParams.get("key");
+  // CR-04: Only accept key via header, not query string (prevents key leaking in logs)
+  const provided = c.req.header("x-brain-key");
   if (!provided) {
-    return c.json({ error: "Missing access key" }, 401);
+    return c.json({ error: "Missing access key. Use the x-brain-key header." }, 401);
   }
 
+  let user: ResolvedUser | null;
   try {
-    currentUser = await authenticateRequest(provided);
+    user = await authenticateRequest(provided);
   } catch {
     return c.json({ error: "Invalid or missing access key" }, 401);
   }
 
-  const transport = new StreamableHTTPTransport();
-  await server.connect(transport);
-  return transport.handleRequest(c);
+  // CR-01: Use AsyncLocalStorage for per-request user context (safe under concurrency)
+  return requestContext.run({ user }, async () => {
+    const transport = new StreamableHTTPTransport();
+    await server.connect(transport);
+    return transport.handleRequest(c);
+  });
 });
 
 Deno.serve({ port: parseInt(Deno.env.get("PORT") || "8000", 10) }, app.fetch);

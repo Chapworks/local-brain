@@ -57,7 +57,8 @@ export async function generateDigest(
   frequency: string
 ): Promise<DigestData> {
   const client = await pool.connect();
-  const interval = frequency === "weekly" ? "7 days" : "1 day";
+  // CR-03: Use parameterized interval instead of string interpolation
+  const intervalDays = frequency === "weekly" ? 7 : 1;
 
   try {
     const result = await client.queryObject<{
@@ -66,9 +67,9 @@ export async function generateDigest(
     }>(
       `SELECT content, metadata FROM thoughts
        WHERE user_id = $1 AND archived = FALSE
-         AND created_at >= NOW() - INTERVAL '${interval}'
+         AND created_at >= NOW() - make_interval(days => $2)
        ORDER BY created_at DESC`,
-      [userId]
+      [userId, intervalDays]
     );
 
     const thoughts = result.rows;
@@ -160,11 +161,44 @@ export function formatDigest(data: DigestData): string {
   return lines.join("\n");
 }
 
+/** CR-06: Validate webhook URL — must be HTTPS and not an internal/private IP. */
+export function isValidWebhookUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    // Block obvious internal hostnames and private IPs
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host.endsWith(".local") ||
+      host.endsWith(".internal") ||
+      host === "metadata.google.internal" ||
+      host === "169.254.169.254"
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Deliver digest via webhook. */
 export async function deliverDigest(
   webhookUrl: string,
   digest: DigestData
 ): Promise<boolean> {
+  if (!isValidWebhookUrl(webhookUrl)) {
+    console.error(`Digest delivery blocked: invalid webhook URL "${webhookUrl}"`);
+    return false;
+  }
+
   try {
     const text = formatDigest(digest);
     const res = await fetch(webhookUrl, {
