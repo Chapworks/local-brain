@@ -127,6 +127,20 @@ Run on a Linode, DigitalOcean, Hetzner, or AWS EC2 instance. Caddy handles HTTPS
 
 See [SETUP.md](SETUP.md) for step-by-step installation instructions.
 
+## Specs
+
+The `specs/` directory contains detailed documentation of what was built and how it works. Useful for contributors, AI agents, and anyone who wants to understand the system before modifying it:
+
+- [specs/architecture.md](specs/architecture.md) — system architecture, services, routing, database schema, file structure
+- [specs/mcp-tools.md](specs/mcp-tools.md) — the four MCP tools, authentication, metadata extraction
+- [specs/admin-panel.md](specs/admin-panel.md) — admin UI, auth flow, pages, Docker proxy integration
+- [specs/environment.md](specs/environment.md) — all environment variables and provider configuration
+- [specs/security.md](specs/security.md) — threat model, auth layers, permissions, known limitations
+
+## Contributing
+
+Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, design principles, and what we look for in PRs. The specs above are designed to give both humans and AI tools enough context to make good changes.
+
 ## Upstream
 
 Forked from: https://github.com/NateBJones-Projects/OB1
