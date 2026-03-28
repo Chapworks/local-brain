@@ -10,6 +10,38 @@ Open Brain is cloud-first. Local Brain is yours-first. Same four MCP tools, same
 
 Based on the OB1 Kubernetes self-hosted variant, simplified for a single-machine Docker Compose deployment.
 
+## Prerequisites
+
+### Hardware (minimum)
+
+- Any x86_64 or ARM64 Linux machine (Raspberry Pi 4+, old laptop, NUC, desktop, VM)
+- 1 GB RAM available (PostgreSQL + Deno server + tunnel are lightweight)
+- 1 GB disk space (grows slowly — thoughts are small, embeddings are ~6KB each)
+
+### Hardware (recommended)
+
+- 2+ GB RAM
+- SSD (faster vector search on large datasets)
+- Always-on machine (so your MCP tools can always reach it)
+
+### Software
+
+- **Docker** and **Docker Compose** — that's it. Everything else runs in containers.
+  - Install: https://docs.docker.com/engine/install/
+  - Docker Compose v2 is included with modern Docker installs
+
+### External Accounts (free tiers work)
+
+- **AI provider** (pick one):
+  - [OpenRouter](https://openrouter.ai) — simplest, one key for everything (~$5 credits lasts months)
+  - [OpenAI](https://platform.openai.com) — direct, no middleman
+  - [Anthropic](https://console.anthropic.com) — for Claude-based metadata extraction (can mix with OpenAI embeddings)
+- **Cloudflare** (for remote access only — skip if localhost-only):
+  - Free account at [cloudflare.com](https://cloudflare.com)
+  - A domain name with DNS managed by Cloudflare
+- **MCP client** (what connects to Local Brain):
+  - Claude Code, Claude Desktop, Cursor, or any MCP-compatible tool
+
 ## Architecture
 
 ```
