@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="520" rx="12" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="400" y="36" text-anchor="middle" fill="#f1f5f9" font-size="18" font-weight="700">Local Brain — Home Install (Cloudflare Tunnel)</text>
+
+  <!-- Internet zone -->
+  <rect x="30" y="56" width="740" height="80" rx="8" fill="none" stroke="#475569" stroke-dasharray="6,4" stroke-width="1"/>
+  <text x="50" y="74" fill="#64748b" font-size="11" font-weight="600">INTERNET</text>
+
+  <!-- MCP Clients -->
+  <rect x="50" y="82" width="160" height="40" rx="6" fill="#1e3a5f"/>
+  <text x="130" y="107" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">MCP Clients</text>
+
+  <!-- Browser -->
+  <rect x="240" y="82" width="140" height="40" rx="6" fill="#1e3a5f"/>
+  <text x="310" y="107" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">Browser (Admin)</text>
+
+  <!-- Cloudflare -->
+  <rect x="500" y="82" width="250" height="40" rx="6" fill="#7c3aed" fill-opacity="0.25" stroke="#7c3aed" stroke-width="1"/>
+  <text x="625" y="102" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Cloudflare Edge</text>
+  <text x="625" y="116" text-anchor="middle" fill="#a78bfa" font-size="10">HTTPS · DDoS · CDN · IP hidden</text>
+
+  <!-- Arrow: Clients → Cloudflare -->
+  <line x1="210" y1="102" x2="498" y2="102" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="350" y="95" text-anchor="middle" fill="#64748b" font-size="10">HTTPS</text>
+
+  <!-- Arrow: Browser → Cloudflare -->
+  <line x1="380" y1="102" x2="498" y2="102" stroke="#60a5fa" stroke-width="1.5"/>
+
+  <!-- Your home zone -->
+  <rect x="30" y="150" width="740" height="350" rx="8" fill="none" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/>
+  <text x="50" y="168" fill="#4ade80" font-size="11" font-weight="600">YOUR HOME NETWORK — no inbound ports open</text>
+
+  <!-- Docker zone -->
+  <rect x="50" y="180" width="700" height="300" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <text x="70" y="198" fill="#94a3b8" font-size="11" font-weight="600">DOCKER COMPOSE</text>
+
+  <!-- Tunnel container -->
+  <rect x="520" y="210" width="210" height="60" rx="6" fill="#7c3aed" fill-opacity="0.15" stroke="#7c3aed" stroke-width="1"/>
+  <text x="625" y="234" text-anchor="middle" fill="#c4b5fd" font-size="13" font-weight="600">cloudflared</text>
+  <text x="625" y="252" text-anchor="middle" fill="#a78bfa" font-size="10">Outbound tunnel only</text>
+
+  <!-- Arrow: Cloudflare → Tunnel -->
+  <line x1="625" y1="122" x2="625" y2="208" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+  <text x="638" y="168" fill="#a78bfa" font-size="10">outbound</text>
+
+  <!-- MCP Server container -->
+  <rect x="200" y="210" width="280" height="60" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+  <text x="340" y="234" text-anchor="middle" fill="#93c5fd" font-size="13" font-weight="700">Deno MCP Server</text>
+  <text x="340" y="252" text-anchor="middle" fill="#60a5fa" font-size="10">:8000 · MCP tools + Admin UI + /health</text>
+
+  <!-- Arrow: Tunnel → MCP Server -->
+  <line x1="520" y1="240" x2="482" y2="240" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="500" y="233" text-anchor="middle" fill="#64748b" font-size="10">HTTP</text>
+
+  <!-- Arrow: localhost → MCP Server -->
+  <line x1="130" y1="240" x2="198" y2="240" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Localhost label -->
+  <rect x="70" y="220" width="110" height="40" rx="6" fill="#065f46" fill-opacity="0.4" stroke="#22c55e" stroke-opacity="0.4" stroke-width="1"/>
+  <text x="125" y="244" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="600">localhost:8000</text>
+
+  <!-- PostgreSQL container -->
+  <rect x="200" y="310" width="210" height="70" rx="6" fill="#164e63" stroke="#06b6d4" stroke-width="1"/>
+  <text x="305" y="336" text-anchor="middle" fill="#67e8f9" font-size="13" font-weight="700">PostgreSQL + pgvector</text>
+  <text x="305" y="354" text-anchor="middle" fill="#22d3ee" font-size="10">:5432 · localhost only</text>
+  <text x="305" y="368" text-anchor="middle" fill="#06b6d4" font-size="10">thoughts · admin_users · vectors</text>
+
+  <!-- Arrow: MCP → PostgreSQL -->
+  <line x1="340" y1="270" x2="305" y2="308" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+  <text x="335" y="292" text-anchor="middle" fill="#64748b" font-size="10">SQL</text>
+
+  <!-- Docker Proxy container -->
+  <rect x="520" y="310" width="210" height="70" rx="6" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+  <text x="625" y="336" text-anchor="middle" fill="#fcd34d" font-size="13" font-weight="600">Docker Socket Proxy</text>
+  <text x="625" y="354" text-anchor="middle" fill="#f59e0b" font-size="10">:2375 · internal only</text>
+  <text x="625" y="368" text-anchor="middle" fill="#d97706" font-size="10">containers + restart only</text>
+
+  <!-- Arrow: MCP → Docker Proxy -->
+  <line x1="480" y1="260" x2="560" y2="310" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowYellow)"/>
+  <text x="530" y="280" text-anchor="middle" fill="#64748b" font-size="10">logs/restart</text>
+
+  <!-- AI APIs -->
+  <rect x="70" y="310" width="110" height="50" rx="6" fill="#4a1d96" fill-opacity="0.3" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="125" y="332" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600">AI APIs</text>
+  <text x="125" y="348" text-anchor="middle" fill="#a78bfa" font-size="9">embeddings + chat</text>
+
+  <!-- Arrow: MCP → AI APIs -->
+  <line x1="240" y1="270" x2="155" y2="308" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowViolet)"/>
+  <text x="185" y="285" text-anchor="middle" fill="#64748b" font-size="10">outbound</text>
+
+  <!-- Docker socket -->
+  <rect x="560" y="400" width="130" height="36" rx="4" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="625" y="423" text-anchor="middle" fill="#94a3b8" font-size="10">docker.sock (ro)</text>
+
+  <!-- Arrow: Socket → Proxy -->
+  <line x1="625" y1="400" x2="625" y2="382" stroke="#475569" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+  <!-- pgdata volume -->
+  <rect x="240" y="400" width="130" height="36" rx="4" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="305" y="423" text-anchor="middle" fill="#94a3b8" font-size="10">pgdata volume</text>
+
+  <!-- Arrow: Volume → PG -->
+  <line x1="305" y1="400" x2="305" y2="382" stroke="#475569" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+  <!-- Legend -->
+  <text x="70" y="470" fill="#64748b" font-size="10">Green border = your network boundary · Purple = Cloudflare · Blue = application · Cyan = database · Yellow = Docker management</text>
+  <text x="70" y="486" fill="#64748b" font-size="10">No inbound ports on your router. Tunnel connects outbound to Cloudflare. Home IP never exposed.</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#4ade80"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrowYellow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowViolet" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#475569"/>
+    </marker>
+  </defs>
+</svg>

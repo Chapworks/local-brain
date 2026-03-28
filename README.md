@@ -55,22 +55,13 @@ Based on the OB1 Kubernetes self-hosted variant, simplified for a single-machine
 
 ## Architecture
 
-```
-Internet
-  │
-  ▼
-Cloudflare Tunnel (HTTPS, DDoS protection, no exposed IP)
-  │
-  ▼
-Deno MCP Server (port 8000, auth via access key)
-  │
-  ▼
-PostgreSQL + pgvector (port 5432, local only)
-```
+### Home Install (Cloudflare Tunnel)
 
-External API calls (outbound only):
-- Embeddings API (OpenRouter, OpenAI, or compatible)
-- Chat API for metadata extraction (OpenRouter, OpenAI, Anthropic — configurable)
+![Home architecture — Cloudflare Tunnel](docs/architecture-home.svg)
+
+### Cloud Install (Caddy + Let's Encrypt)
+
+![Cloud architecture — Caddy](docs/architecture-cloud.svg)
 
 ## Stack
 
