@@ -15,12 +15,13 @@ interface Stats {
   connections: number;
 }
 
-export const DashboardPage: FC<{ user: string; stats: Stats; notifications?: LayoutNotification[] }> = ({
+export const DashboardPage: FC<{ user: string; stats: Stats; notifications?: LayoutNotification[]; version?: string }> = ({
   user,
   stats,
   notifications,
+  version,
 }) => (
-  <Layout title="Dashboard" user={user} notifications={notifications}>
+  <Layout title="Dashboard" user={user} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Dashboard</h1>
 
     <div class="grid grid-3">

@@ -19,10 +19,12 @@ const LEVEL_STYLES: Record<string, { bg: string; border: string; color: string; 
 export const Layout: FC<{
   title: string;
   user?: string;
+  version?: string;
   notifications?: LayoutNotification[];
 }> = ({
   title,
   user,
+  version,
   notifications,
   children,
 }) => (
@@ -93,7 +95,7 @@ export const Layout: FC<{
     </head>
     <body>
       <nav>
-        <span class="brand">Local Brain</span>
+        <span class="brand">Local Brain{version && <span style="font-weight:400; font-size:0.75rem; color:#64748b; margin-left:0.5rem">v{version}</span>}</span>
         <a href="/admin">Dashboard</a>
         <a href="/admin/thoughts">Thoughts</a>
         <a href="/admin/graph">Graph</a>

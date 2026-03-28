@@ -276,6 +276,13 @@ function checkRateLimit(ip: string): boolean {
 
 // --- Build the Hono sub-app ---
 
+// Read version once at import time
+const APP_VERSION = await Deno.readTextFile(
+  new URL("../VERSION", import.meta.url).pathname
+).catch(() =>
+  Deno.readTextFile(new URL("../../VERSION", import.meta.url).pathname)
+).then((v) => v.trim()).catch(() => "");
+
 export function createAdminApp(pool: Pool): Hono {
   const admin = new Hono();
 
@@ -453,7 +460,7 @@ export function createAdminApp(pool: Pool): Hono {
         (
           <DashboardPage
             user={user}
-            notifications={notifs(c)}
+            notifications={notifs(c)} version={APP_VERSION}
             stats={{
               totalThoughts: total,
               archivedThoughts: archived,
@@ -563,7 +570,7 @@ export function createAdminApp(pool: Pool): Hono {
         (
           <ThoughtsPage
             user={user}
-            notifications={notifs(c)}
+            notifications={notifs(c)} version={APP_VERSION}
             thoughts={thoughtsResult.rows}
             total={total}
             page={page}
@@ -636,7 +643,7 @@ export function createAdminApp(pool: Pool): Hono {
     const brainUsers = await getBrainUsers(pool);
 
     return c.html(
-      (<UsersPage user={user} notifications={notifs(c)} brainUsers={brainUsers} />) as unknown as string
+      (<UsersPage user={user} notifications={notifs(c)} version={APP_VERSION} brainUsers={brainUsers} />) as unknown as string
     );
   });
 
@@ -705,7 +712,7 @@ export function createAdminApp(pool: Pool): Hono {
       });
 
       return c.html(
-        (<GraphPage user={user} notifications={notifs(c)} graphData={graphData} />) as unknown as string
+        (<GraphPage user={user} notifications={notifs(c)} version={APP_VERSION} graphData={graphData} />) as unknown as string
       );
     } finally {
       client.release();
@@ -730,7 +737,7 @@ export function createAdminApp(pool: Pool): Hono {
         (
           <ImportExportPage
             user={user}
-            notifications={notifs(c)}
+            notifications={notifs(c)} version={APP_VERSION}
             thoughtCount={countResult.rows[0]?.count || 0}
             brainUsers={usersResult.rows}
           />
@@ -835,7 +842,7 @@ export function createAdminApp(pool: Pool): Hono {
           (
             <ImportExportPage
               user={user}
-              notifications={notifs(c)}
+              notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
               flash={{ type: "error", message: "No file selected." }}
@@ -867,7 +874,7 @@ export function createAdminApp(pool: Pool): Hono {
           (
             <ImportExportPage
               user={user}
-              notifications={notifs(c)}
+              notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
               flash={{ type: "error", message: `Parse error: ${(err as Error).message}` }}
@@ -947,7 +954,7 @@ export function createAdminApp(pool: Pool): Hono {
         (
           <ImportExportPage
             user={user}
-            notifications={notifs(c)}
+            notifications={notifs(c)} version={APP_VERSION}
             thoughtCount={countResult.rows[0]?.count || 0}
             brainUsers={usersResult.rows}
             flash={{
@@ -993,7 +1000,7 @@ export function createAdminApp(pool: Pool): Hono {
         (
           <DigestsPage
             user={user}
-            notifications={notifs(c)}
+            notifications={notifs(c)} version={APP_VERSION}
             configs={configsResult.rows}
             brainUsers={usersResult.rows}
           />
@@ -1091,7 +1098,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <UsagePage
           user={user}
-          notifications={notifs(c)}
+          notifications={notifs(c)} version={APP_VERSION}
           summary={summary}
           filterDays={filterDays}
           brainUsers={brainUsers}
@@ -1197,7 +1204,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <BackupsPage
           user={user}
-          notifications={notifs(c)}
+          notifications={notifs(c)} version={APP_VERSION}
           localBackups={localBackups}
           cloudBackupNames={[...cloudBackupNames]}
           cloudConfigured={isCloudConfigured}
@@ -1271,7 +1278,7 @@ export function createAdminApp(pool: Pool): Hono {
     }));
 
     return c.html(
-      (<ConfigPage user={user} notifications={notifs(c)} config={config} />) as unknown as string
+      (<ConfigPage user={user} notifications={notifs(c)} version={APP_VERSION} config={config} />) as unknown as string
     );
   });
 
@@ -1324,7 +1331,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <ConfigPage
           user={user}
-          notifications={notifs(c)}
+          notifications={notifs(c)} version={APP_VERSION}
           config={config}
           flash={{
             type: "success",
@@ -1351,7 +1358,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <LogsPage
           user={user}
-          notifications={notifs(c)}
+          notifications={notifs(c)} version={APP_VERSION}
           service={service}
           logs={logs}
           services={COMPOSE_SERVICES}

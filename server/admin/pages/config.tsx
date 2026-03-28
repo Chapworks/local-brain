@@ -14,15 +14,16 @@ interface ConfigEntry {
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   config: ConfigEntry[];
   flash?: { type: "success" | "error"; message: string };
 }
 
-export const ConfigPage: FC<Props> = ({ user, notifications, config, flash }) => {
+export const ConfigPage: FC<Props> = ({ user, notifications, version, config, flash }) => {
   const sections = [...new Set(config.map((c) => c.section))];
 
   return (
-    <Layout title="Configuration" user={user} notifications={notifications}>
+    <Layout title="Configuration" user={user} notifications={notifications} version={version}>
       <h1 style="font-size:1.5rem; margin-bottom:1rem">Configuration</h1>
 
       {flash && (

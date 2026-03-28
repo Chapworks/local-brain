@@ -7,6 +7,7 @@ import type { LayoutNotification } from "./layout.tsx";
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   thoughtCount: number;
   brainUsers: { id: number; name: string }[];
   flash?: { type: string; message: string };
@@ -15,11 +16,12 @@ interface Props {
 export const ImportExportPage: FC<Props> = ({
   user,
   notifications,
+  version,
   thoughtCount,
   brainUsers,
   flash,
 }) => (
-  <Layout title="Import / Export" user={user} notifications={notifications}>
+  <Layout title="Import / Export" user={user} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Import / Export</h1>
 
     {flash && (

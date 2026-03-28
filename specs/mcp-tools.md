@@ -2,7 +2,7 @@
 
 ## Overview
 
-Local Brain exposes four MCP tools via the Streamable HTTP Transport protocol. All tools are registered on a single `McpServer` instance named `local-brain` (version `1.0.0`).
+Local Brain exposes nine MCP tools via the Streamable HTTP Transport protocol. All tools are registered on a single `McpServer` instance named `local-brain`. The version is read from the `VERSION` file at the repository root.
 
 ## Authentication
 
@@ -77,6 +77,59 @@ Summary statistics across all captured thoughts.
 - Types breakdown with counts
 - Top 10 topics with counts
 - People mentioned with counts
+- Thought connections count
+
+### `get_thought_connections`
+
+Get connections between thoughts — find what's related to a specific thought, or browse the full connection graph.
+
+**Input:**
+- `thought_id` (number, optional) — get connections for a specific thought. If omitted, returns the top connections across all thoughts.
+- `limit` (number, optional, default 50) — max connections to return
+
+**Output:** List of connected thought pairs with similarity scores and content previews.
+
+### `export_thoughts`
+
+Export all thoughts as JSON or Markdown. The "no lock-in" feature.
+
+**Input:**
+- `format` (string, optional, default "json") — "json" or "markdown"
+- `include_archived` (boolean, optional, default false)
+
+**Output:** Full export of all thoughts with metadata.
+
+### `archive_thought`
+
+Archive or unarchive a thought. Archived thoughts are hidden from search and list but not deleted.
+
+**Input:**
+- `thought_id` (number, required)
+- `unarchive` (boolean, optional, default false) — set to true to unarchive
+
+**Output:** Confirmation message.
+
+### `usage_stats`
+
+Get AI API usage and cost statistics.
+
+**Input:**
+- `days` (number, optional, default 30) — look back this many days (0 = all time)
+
+**Output:** Total cost, token counts, API calls broken down by operation, model, and day.
+
+### `system_health`
+
+Check the health of the Local Brain system. Designed for AI agents to monitor the system over time.
+
+**Input:** None.
+
+**Output:**
+- Version (with update availability check against latest GitHub release)
+- Database stats (active/archived thoughts, connections, brain users, database size)
+- Backup status (schedule, encryption, cloud sync configuration)
+- Active problems (errors and warnings from the notification system)
+- Configuration summary (embedding model, chat model, API format)
 
 ## Metadata Extraction
 

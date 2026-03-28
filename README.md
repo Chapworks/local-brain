@@ -119,6 +119,15 @@ Run on a Linode, DigitalOcean, Hetzner, or AWS EC2 instance. Caddy handles HTTPS
 
 See [SETUP.md](SETUP.md) for step-by-step installation instructions.
 
+## Updating
+
+```bash
+./scripts/update.sh          # pull, rebuild, migrate, restart
+./scripts/update.sh --check  # just check if a new version is available
+```
+
+Your AI agent can also check for updates via the `system_health` MCP tool — it compares your running version against the latest GitHub release.
+
 ## Usage
 
 Once Local Brain is running and connected to an MCP client, you use it by talking to your AI. There's no app to open, no interface to learn. You just say things.

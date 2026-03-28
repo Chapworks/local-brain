@@ -16,7 +16,8 @@ COPY server/notifications.ts ./
 COPY server/admin/ ./admin/
 COPY server/scripts/ ./scripts/
 
-# Copy migrations
+# Copy version and migrations
+COPY VERSION ./
 COPY migrations/ /app/migrations/
 
 # Run as non-root

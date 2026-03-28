@@ -8,6 +8,7 @@ import type { UsageSummary } from "../../usage.ts";
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   summary: UsageSummary;
   filterDays: number;
   brainUsers: { id: number; name: string }[];
@@ -28,12 +29,13 @@ function formatTokens(n: number): string {
 export const UsagePage: FC<Props> = ({
   user,
   notifications,
+  version,
   summary,
   filterDays,
   brainUsers,
   filterUser,
 }) => (
-  <Layout title="AI Costs" user={user} notifications={notifications}>
+  <Layout title="AI Costs" user={user} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">AI Costs</h1>
 
     <div class="card">

@@ -13,6 +13,7 @@ interface BackupInfo {
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   localBackups: BackupInfo[];
   cloudBackupNames: string[];
   cloudConfigured: boolean;
@@ -28,6 +29,7 @@ interface Props {
 export const BackupsPage: FC<Props> = ({
   user,
   notifications,
+  version,
   localBackups,
   cloudBackupNames,
   cloudConfigured,
@@ -64,7 +66,7 @@ export const BackupsPage: FC<Props> = ({
   const cloudOnlyCount = cloudBackupNames.filter((n) => !localBackups.some((b) => b.name === n)).length;
 
   return (
-    <Layout title="Backups" user={user} notifications={notifications}>
+    <Layout title="Backups" user={user} notifications={notifications} version={version}>
       <h1 style="font-size:1.5rem; margin-bottom:1rem">Backups</h1>
 
       {flash && (

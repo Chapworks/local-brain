@@ -17,6 +17,7 @@ interface Thought {
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   thoughts: Thought[];
   total: number;
   page: number;
@@ -34,6 +35,7 @@ interface Props {
 export const ThoughtsPage: FC<Props> = ({
   user,
   notifications,
+  version,
   thoughts,
   total,
   page,
@@ -63,7 +65,7 @@ export const ThoughtsPage: FC<Props> = ({
   };
 
   return (
-    <Layout title="Thoughts" user={user} notifications={notifications}>
+    <Layout title="Thoughts" user={user} notifications={notifications} version={version}>
       <h1 style="font-size:1.5rem; margin-bottom:1rem">Thoughts</h1>
 
       <div class="card">

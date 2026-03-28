@@ -16,12 +16,13 @@ interface BrainUser {
 interface Props {
   user: string;
   notifications?: LayoutNotification[];
+  version?: string;
   brainUsers: BrainUser[];
   flash?: { type: string; message: string };
 }
 
-export const UsersPage: FC<Props> = ({ user, notifications, brainUsers, flash }) => (
-  <Layout title="Brain Users" user={user} notifications={notifications}>
+export const UsersPage: FC<Props> = ({ user, notifications, version, brainUsers, flash }) => (
+  <Layout title="Brain Users" user={user} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Brain Users</h1>
 
     {flash && (

@@ -32,7 +32,7 @@ import { Pool } from "postgres";
 import * as bcrypt from "bcrypt";
 import { createAdminApp } from "./admin/mod.ts";
 import { processDigests } from "./digest.ts";
-import { checkBackupHealth } from "./notifications.ts";
+import { checkBackupHealth, getActiveNotifications } from "./notifications.ts";
 import {
   extractOpenAIUsage,
   extractAnthropicUsage,
@@ -40,6 +40,14 @@ import {
 } from "./usage.ts";
 import { userScope } from "./user-scope.ts";
 import type { ResolvedUser } from "./user-scope.ts";
+
+// --- Version ---
+
+const VERSION = await Deno.readTextFile(
+  new URL("./VERSION", import.meta.url).pathname
+).catch(() =>
+  Deno.readTextFile(new URL("../VERSION", import.meta.url).pathname)
+).then((v) => v.trim()).catch(() => "unknown");
 
 // --- Configuration ---
 
@@ -297,7 +305,7 @@ let currentUser: ResolvedUser | null = null;
 
 const server = new McpServer({
   name: "local-brain",
-  version: "2.0.0",
+  version: VERSION,
 });
 
 // Tool 1: Semantic Search
@@ -1006,6 +1014,151 @@ server.registerTool(
   }
 );
 
+// Tool 9: System Health
+server.registerTool(
+  "system_health",
+  {
+    title: "System Health",
+    description:
+      "Check the health of the Local Brain system. Returns version, database stats, backup status, active problems, and configuration summary. Use this to monitor the system over time.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const client = await pool.connect();
+      try {
+        // --- Core stats ---
+        const countResult = await client.queryObject<{
+          active: number;
+          archived: number;
+        }>(
+          `SELECT
+            COUNT(*) FILTER (WHERE archived = FALSE)::int AS active,
+            COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived
+           FROM thoughts`
+        );
+        const usersResult = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM brain_users WHERE is_active = TRUE"
+        );
+        const linksResult = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM thought_links"
+        );
+
+        // --- Database size ---
+        const sizeResult = await client.queryObject<{ size: string }>(
+          `SELECT pg_size_pretty(pg_database_size(current_database())) AS size`
+        );
+
+        // --- Last backup date ---
+        // We check the most recent backup file name in the backups volume by
+        // looking at the cron schedule env var and any notifications.
+        const backupCron = Deno.env.get("BACKUP_CRON") || "not configured";
+        const encryptionEnabled = !!Deno.env.get("BACKUP_ENCRYPTION_KEY");
+        const cloudConfigured = !!Deno.env.get("RCLONE_REMOTE");
+        const rcloneRemote = Deno.env.get("RCLONE_REMOTE") || "none";
+
+        // --- Active notifications (problems) ---
+        const notifications = await getActiveNotifications(pool);
+        const errors = notifications.filter((n) => n.level === "error");
+        const warnings = notifications.filter((n) => n.level === "warning");
+        const infos = notifications.filter((n) => n.level === "info");
+
+        // --- Version check ---
+        let latestVersion = "";
+        try {
+          const res = await fetch(
+            "https://api.github.com/repos/Chapworks/local-brain/releases/latest",
+            { headers: { "User-Agent": "local-brain" } }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            latestVersion = (data.tag_name || "").replace(/^v/, "");
+          }
+        } catch {
+          // GitHub unreachable — skip version check
+        }
+
+        // --- Build output ---
+        const lines: string[] = [
+          `Local Brain v${VERSION}`,
+        ];
+
+        if (latestVersion && latestVersion !== VERSION) {
+          lines.push(`UPDATE AVAILABLE: v${latestVersion} (run ./scripts/update.sh)`);
+        } else if (latestVersion) {
+          lines.push(`Up to date.`);
+        }
+
+        lines.push(
+          "",
+          "=== Database ===",
+          `Active thoughts: ${countResult.rows[0]?.active || 0}`,
+          `Archived thoughts: ${countResult.rows[0]?.archived || 0}`,
+          `Thought connections: ${linksResult.rows[0]?.count || 0}`,
+          `Brain users: ${usersResult.rows[0]?.count || 0}`,
+          `Database size: ${sizeResult.rows[0]?.size || "unknown"}`,
+        );
+
+        lines.push(
+          "",
+          "=== Backups ===",
+          `Schedule: ${backupCron}`,
+          `Encryption: ${encryptionEnabled ? "enabled (AES-256)" : "DISABLED"}`,
+          `Cloud sync: ${cloudConfigured ? rcloneRemote : "NOT CONFIGURED"}`,
+        );
+
+        if (errors.length > 0 || warnings.length > 0) {
+          lines.push(
+            "",
+            "=== Problems ==="
+          );
+          for (const n of errors) {
+            lines.push(`[ERROR] ${n.title} — ${n.message}`);
+          }
+          for (const n of warnings) {
+            lines.push(`[WARNING] ${n.title} — ${n.message}`);
+          }
+        } else {
+          lines.push(
+            "",
+            "=== Problems ===",
+            "None. All checks passed."
+          );
+        }
+
+        if (infos.length > 0) {
+          lines.push(
+            "",
+            "=== Info ==="
+          );
+          for (const n of infos) {
+            lines.push(`[INFO] ${n.title} — ${n.message}`);
+          }
+        }
+
+        lines.push(
+          "",
+          "=== Configuration ===",
+          `Embedding model: ${EMBEDDING_MODEL}`,
+          `Chat model: ${CHAT_MODEL}`,
+          `Chat API format: ${CHAT_API_FORMAT}`,
+        );
+
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+        };
+      } finally {
+        client.release();
+      }
+    } catch (err: unknown) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // --- Cron Jobs ---
 
 // Archive expired thoughts — runs every hour
@@ -1083,6 +1236,7 @@ app.get("/health", async (c) => {
       );
       return c.json({
         status: "ok",
+        version: VERSION,
         thoughts: result.rows[0]?.count || 0,
         archived: result.rows[0]?.archived || 0,
         users: userCount.rows[0]?.count || 0,
