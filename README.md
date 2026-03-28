@@ -118,6 +118,79 @@ Run on a Linode, DigitalOcean, Hetzner, or AWS EC2 instance. Caddy handles HTTPS
 
 See [SETUP.md](SETUP.md) for step-by-step installation instructions.
 
+## Usage
+
+Once Local Brain is running and connected to an MCP client, you use it by talking to your AI. There's no app to open, no interface to learn. You just say things.
+
+### Capturing thoughts
+
+Tell your AI to remember something. It captures the thought, generates an embedding, and extracts metadata automatically.
+
+```
+Remember that the API redesign should use versioned endpoints.
+```
+```
+Capture this: met with Sarah about the Q3 roadmap. She wants to prioritize mobile.
+```
+```
+Save a thought: the Tailwind approach is cleaner than custom CSS for the admin panel.
+```
+
+You don't need to use specific commands. Any MCP-connected AI will recognize that you want to capture something and call the `capture_thought` tool.
+
+### Searching
+
+Ask about something you've captured before. Search is semantic — it matches meaning, not exact words.
+
+```
+What did I say about the API redesign?
+```
+```
+What were my notes from meetings with Sarah?
+```
+```
+Search my thoughts about mobile.
+```
+
+### Listing and filtering
+
+```
+Show me my recent thoughts.
+```
+```
+What tasks have I captured this week?
+```
+```
+List all thoughts about people.
+```
+
+### Stats
+
+```
+Give me a summary of my thought stats.
+```
+
+### Where This Shines: Mobile
+
+Local Brain was built from a phone. It's designed to be used from one.
+
+**Claude Code with Remote MCP** — Connect Claude Code to your Local Brain URL as a remote MCP server. Then use Claude Code from any device — laptop, phone (via Claude mobile app or remote connection tools), tablet. Your brain is always reachable.
+
+**Claudegram / Telegram bots** — If you run an AI agent on Telegram (like the one that built this project), connect it to Local Brain via MCP. Now you can capture and search thoughts from a Telegram chat while you're on a walk, at the grocery store, or working on a trailer.
+
+**Claude Desktop** — Add Local Brain to your `claude_desktop_config.json`. Every conversation has access to your captured knowledge.
+
+**Cursor / other MCP clients** — Any tool that supports MCP over HTTP can connect. Your coding assistant remembers what you told it last week.
+
+The pattern is the same everywhere: your AI tools talk to one brain, and that brain runs on your hardware. You capture a thought from your phone at lunch, and your laptop IDE can find it that afternoon. One brain, many clients, your data.
+
+### Tips
+
+- **Capture liberally.** Thoughts are cheap (~$0.001 per thought in API costs). The semantic search means you don't need to organize anything — just capture and the AI will find it later.
+- **Don't worry about formatting.** The metadata extraction handles categorization. Say "meeting with Jake about pricing, he wants to go lower" and the system tags it with people (Jake), topics (pricing, meeting), and type (observation).
+- **Use it as a second brain for your AI.** Tell your AI to capture things during work sessions: "Remember that we decided to use Caddy instead of Nginx." Next time you ask about the project, the AI can search your thoughts and pick up where you left off.
+- **Check the admin panel.** Visit `http://localhost:8000/admin` to browse everything visually, filter by type or topic, and verify what's being captured.
+
 ## Specs
 
 The `specs/` directory contains detailed documentation of what was built and how it works. Useful for contributors, AI agents, and anyone who wants to understand the system before modifying it:
