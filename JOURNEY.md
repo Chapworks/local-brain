@@ -60,6 +60,20 @@ Can you go from a casual question to a shipped open source product without ever 
 
 The admin panel adds zero new external UI frameworks. Hono JSX renders everything server-side. CSS is inline in the layout component. The only new dependencies are `bcrypt` and `jose` — both mature, both zero-dependency.
 
+**GitHub repo goes live.** Nick authenticates `gh` CLI (the one concession — auth setup isn't building). Claude creates the repo (`Chapworks/local-brain`), initializes git inside the product folder, commits 25 files / 2,921 lines, and pushes. Then clones to `../local-brain` as its own repo and removes the code from the chapworks monorepo. Updates `CLAUDE.md` references to point to the new standalone repo.
+
+**Prerequisites and system requirements.** Nick points out that the setup guide assumes too much. Claude adds full prerequisites to the README: OS support (Linux, macOS, Windows/WSL2), kernel requirements, hardware specs (minimum: RPi 4+, 1GB RAM; recommended: 2GB+, SSD), software (Git, Docker 20.10+, openssl, curl), and external accounts needed. SETUP.md gets rewritten with a pre-flight checklist, `git clone` step, admin user creation, localhost-only path, and troubleshooting section.
+
+**Cloud hosting.** Nick asks: what if someone wants to run this on a cloud VM instead of at home? Claude builds a complete parallel deployment path: `docker-compose.cloud.yml` (swaps Cloudflare Tunnel for Caddy reverse proxy), `Caddyfile`, and `CLOUD-HOSTING.md` with VM hardening (UFW firewall, SSH lockdown), Docker install, DNS setup, Let's Encrypt auto-HTTPS, security checklist, and cost estimate ($5-12/month). The README gets restructured with side-by-side hosting options.
+
+**Specs (vibe coded, then documented).** Nick says "we vibe coded this" — he wants specs written after the fact so contributors and AI agents can understand what was built. Claude creates five spec files in `specs/`: architecture (system diagram, services, routing, schema, file tree), MCP tools (all 4 tools with inputs/outputs, metadata extraction, API formats), admin panel (pages, auth flow, rate limiting, Docker proxy, design decisions), environment (all env vars with defaults and provider patterns), and security (threat model, auth layers, permissions, known limitations). Every spec describes what IS, not what was planned.
+
+**Contributing guide.** Nick asks whether repos normally invite PRs in the README — they do, but you have to say it. Claude writes `CONTRIBUTING.md` with design principles (minimal deps, no build step, server-rendered, scoped permissions, no telemetry), PR guidelines, "good first contributions" list, explicit welcome for AI-assisted contributions, and a clear "won't accept" list. The README gets Specs and Contributing sections.
+
+**Architecture diagrams.** Nick wants visual diagrams that render on GitHub. Claude creates two SVG files: home install (Cloudflare Tunnel, green network boundary, 4 containers, outbound-only tunnel, localhost access path) and cloud install (Caddy, UFW firewall boundary, Let's Encrypt, exposed ports). Both are dark-themed, color-coded by concern, and embedded in the README via standard markdown image syntax.
+
+**Roadmap brainstorm.** Nick asks for 5 feature suggestions. Claude proposes: (1) thought connections / graph view, (2) scheduled digests, (3) thought expiration and archiving, (4) import/export, (5) multi-user with isolated brains. All five are added to the roadmap.
+
 ---
 
 ## Key Decisions
@@ -98,6 +112,17 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - `server/admin/pages/config.tsx` — configuration viewer/editor
 - `server/admin/pages/logs.tsx` — Docker container log viewer
 - `server/scripts/create-user.ts` — CLI admin user management
+- `CONTRIBUTING.md` — contribution guidelines and design principles
+- `CLOUD-HOSTING.md` — cloud VM hosting guide (Caddy + Let's Encrypt)
+- `docker-compose.cloud.yml` — cloud deployment (Caddy instead of tunnel)
+- `Caddyfile` — reverse proxy config for cloud hosting
+- `docs/architecture-home.svg` — home install architecture diagram
+- `docs/architecture-cloud.svg` — cloud install architecture diagram
+- `specs/architecture.md` — system architecture spec
+- `specs/mcp-tools.md` — MCP tools spec
+- `specs/admin-panel.md` — admin panel spec
+- `specs/environment.md` — environment variables spec
+- `specs/security.md` — security spec
 - `JOURNEY.md` — this file
 
 ---
@@ -115,6 +140,9 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - [x] Public GitHub repo — github.com/Chapworks/local-brain
 - [x] Prerequisites and system requirements documented
 - [x] Cloud VM hosting guide with Caddy + Let's Encrypt
+- [x] Specs (architecture, MCP tools, admin panel, environment, security)
+- [x] Contributing guide and PR invitation
+- [x] Architecture diagrams (home + cloud SVGs, embedded in README)
 - [ ] Set up the Linux host (Docker, Docker Compose)
 - [ ] Create Cloudflare Tunnel (or Caddy for cloud)
 - [ ] Create `.env` with real credentials
@@ -123,6 +151,14 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - [ ] Connect Claude Code as MCP client
 - [ ] Write a Ship With Intent post about the journey
 - [ ] Release
+
+### Roadmap — Future Features
+
+- [ ] **Thought connections / graph view** — auto-link each thought to its 3 most similar existing thoughts by embedding distance. Admin panel gets a graph visualization showing clusters of related ideas.
+- [ ] **Scheduled digests** — daily/weekly summary of captured thoughts via email or webhook. Top topics, open action items, people mentioned. Runs as a cron job inside the container.
+- [ ] **Thought expiration and archiving** — optional TTL per thought. Scratch thoughts auto-archive after a configurable period. Admin panel gets an Archive tab. Keeps active dataset lean for faster search.
+- [ ] **Import/export** — import from Apple Notes, Obsidian, markdown files, or CSV. Export entire brain as JSON or markdown. The "no lock-in" feature.
+- [ ] **Multi-user with isolated brains** — per-user namespaces, separate thoughts and embeddings, per-user MCP access keys. Share one instance without seeing each other's data.
 
 ---
 
@@ -136,3 +172,5 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - The project hit its first context window boundary during the multi-provider work. Claude picked up seamlessly in a new session using a conversation summary. This is worth noting: the AI doing the building has its own memory limitations, and the workaround (context summaries, persistent files) mirrors the exact problem Local Brain is trying to solve for users. The tool and the product share the same constraint.
 - "Let's get crazy" — Nick's request for an admin panel led to a full web UI being built without touching a framework installer, a package manager, or a build tool. The entire admin panel is server-rendered JSX that Deno compiles at runtime. The CSS is inline. There is no `node_modules`, no `npm install`, no webpack, no vite. Just files that run. This is what minimal dependency looks like when an AI writes the code from a phone.
 - Nick is outside working on the trailer while all of this is happening. He's multitasking — physical work with his hands, product development on his phone between tasks. The mental model here isn't "sitting at a desk building software." It's "having a conversation with an AI that happens to produce a deployable product." The barrier to building isn't access to a computer. It's having the idea and knowing what to ask for.
+- The project went from "what is Open Brain?" to a public GitHub repo with architecture diagrams, five spec files, a contributing guide, two deployment paths, and a roadmap — in a single day, from a phone, while working on a trailer. The commit history tells the story: 7 commits, each one a coherent step forward. No false starts, no reverts. The AI maintained the thread across context boundaries and sessions.
+- "We vibe coded this" — Nick's framing is honest and deliberate. The specs came after the code. This is the opposite of traditional software engineering, and it worked. The specs exist to help the next person (or AI) understand what was built, not to justify what was planned. That's a different kind of documentation.

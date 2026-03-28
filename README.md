@@ -128,6 +128,16 @@ The `specs/` directory contains detailed documentation of what was built and how
 - [specs/environment.md](specs/environment.md) — all environment variables and provider configuration
 - [specs/security.md](specs/security.md) — threat model, auth layers, permissions, known limitations
 
+## Roadmap
+
+- **Thought connections / graph view** — auto-link thoughts by embedding similarity, visualize clusters in the admin panel
+- **Scheduled digests** — daily/weekly summaries of captured thoughts via email or webhook
+- **Thought expiration and archiving** — optional TTL, auto-archive old scratch thoughts, keep search fast
+- **Import/export** — bring in notes from Apple Notes, Obsidian, markdown, CSV. Export everything. No lock-in.
+- **Multi-user with isolated brains** — per-user namespaces, separate MCP keys, shared instance
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) if any of these interest you.
+
 ## Contributing
 
 Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, design principles, and what we look for in PRs. The specs above are designed to give both humans and AI tools enough context to make good changes.

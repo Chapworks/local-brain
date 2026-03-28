@@ -121,4 +121,43 @@ local-brain/
         logs.tsx              # Log viewer
     scripts/
       create-user.ts          # CLI admin user management
+  docs/
+    architecture-home.svg     # Home install diagram
+    architecture-cloud.svg    # Cloud install diagram
 ```
+
+## Roadmap Considerations
+
+These planned features will affect the architecture. Notes for contributors:
+
+### Thought connections / graph view
+
+- New `thought_links` table: `source_id`, `target_id`, `similarity` (FLOAT)
+- Populated on `capture_thought` — query top-N similar existing thoughts
+- Admin panel gets a new page (graph visualization) — may need client-side JS (e.g., D3 or a lightweight canvas library). This would be the first client-side JS in the project.
+
+### Scheduled digests
+
+- Needs a scheduling mechanism inside Docker. Options: Deno cron (`Deno.cron`), a sidecar cron container, or a simple `setInterval` in the server process.
+- Outbound email requires SMTP config or a webhook URL — new env vars.
+- Digest logic queries `thoughts` table by time range, aggregates metadata.
+
+### Thought expiration and archiving
+
+- New column on `thoughts`: `expires_at` (TIMESTAMPTZ, nullable). Null = never expires.
+- New table or soft-delete flag for archived thoughts (excluded from MCP search but visible in admin).
+- Cleanup job runs on a schedule (same mechanism as digests).
+
+### Import/export
+
+- Export: `pg_dump` already works for full backup. A user-friendly JSON/markdown export runs as an admin API endpoint.
+- Import: needs a parser per format (markdown, CSV, Apple Notes XML). Each imported item goes through the embedding + metadata pipeline.
+- Bulk import should batch embedding API calls to avoid rate limits.
+
+### Multi-user with isolated brains
+
+- Most significant architectural change. Options:
+  - **Row-level:** add `user_id` column to `thoughts`, filter all queries. Simpler but couples user logic into every query.
+  - **Schema-level:** separate PostgreSQL schemas per user. Cleaner isolation but more complex management.
+- `MCP_ACCESS_KEY` becomes per-user. Server maps key → user ID on each request.
+- Admin panel needs user management beyond the current `admin_users` table.
