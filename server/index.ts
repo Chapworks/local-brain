@@ -32,7 +32,7 @@ import { Pool } from "postgres";
 import * as bcrypt from "bcrypt";
 import { createAdminApp } from "./admin/mod.ts";
 import { processDigests } from "./digest.ts";
-import { checkBackupHealth, getActiveNotifications } from "./notifications.ts";
+import { checkBackupHealth, getActiveNotifications, getMeta, recordExport } from "./notifications.ts";
 import {
   extractOpenAIUsage,
   extractAnthropicUsage,
@@ -103,7 +103,7 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
     return null;
   }
 
-  // Look up by key prefix (first 8 chars)
+  // Look up by key prefix (first 8 chars) — check both primary and secondary keys
   const prefix = key.slice(0, 8);
   const client = await pool.connect();
   try {
@@ -111,17 +111,29 @@ async function resolveUser(key: string): Promise<ResolvedUser | null> {
       id: number;
       name: string;
       mcp_key_hash: string;
+      secondary_key_hash: string | null;
     }>(
-      "SELECT id, name, mcp_key_hash FROM brain_users WHERE key_prefix = $1 AND is_active = TRUE",
+      `SELECT id, name, mcp_key_hash, secondary_key_hash FROM brain_users
+       WHERE (key_prefix = $1 OR secondary_key_prefix = $1) AND is_active = TRUE`,
       [prefix]
     );
 
     for (const row of result.rows) {
-      const valid = await bcrypt.compare(key, row.mcp_key_hash);
-      if (valid) {
+      // Check primary key
+      const validPrimary = await bcrypt.compare(key, row.mcp_key_hash);
+      if (validPrimary) {
         const user = { id: row.id, name: row.name };
         userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
         return user;
+      }
+      // Check secondary key (for rotation)
+      if (row.secondary_key_hash) {
+        const validSecondary = await bcrypt.compare(key, row.secondary_key_hash);
+        if (validSecondary) {
+          const user = { id: row.id, name: row.name };
+          userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
+          return user;
+        }
       }
     }
   } finally {
@@ -852,6 +864,9 @@ server.registerTool(
           params
         );
 
+        // Track export for anti-lock-in reminders
+        recordExport(pool).catch(() => {});
+
         if (format === "markdown") {
           const lines = result.rows.map((t) => {
             const m = t.metadata || {};
@@ -1099,13 +1114,56 @@ server.registerTool(
           `Database size: ${sizeResult.rows[0]?.size || "unknown"}`,
         );
 
+        // --- Backup verification and export tracking ---
+        const lastVerify = await getMeta(pool, "last_backup_verify_at");
+        const lastVerifyResult = await getMeta(pool, "last_backup_verify_result");
+        const lastExport = await getMeta(pool, "last_export_at");
+
         lines.push(
           "",
           "=== Backups ===",
           `Schedule: ${backupCron}`,
           `Encryption: ${encryptionEnabled ? "enabled (AES-256)" : "DISABLED"}`,
           `Cloud sync: ${cloudConfigured ? rcloneRemote : "NOT CONFIGURED"}`,
+          `Last verified: ${lastVerify ? `${new Date(lastVerify).toLocaleDateString()} (${lastVerifyResult || "unknown"})` : "NEVER"}`,
         );
+
+        lines.push(
+          "",
+          "=== Data Portability ===",
+          `Last export: ${lastExport ? new Date(lastExport).toLocaleDateString() : "NEVER"}`,
+        );
+
+        // --- Key age check ---
+        const keyAgeResult = await client.queryObject<{
+          name: string;
+          key_created_at: string | null;
+          has_secondary: boolean;
+        }>(
+          `SELECT name, key_created_at,
+                  (secondary_key_hash IS NOT NULL) AS has_secondary
+           FROM brain_users WHERE is_active = TRUE`
+        );
+
+        const oldKeys: string[] = [];
+        for (const row of keyAgeResult.rows) {
+          if (row.key_created_at) {
+            const ageDays = (Date.now() - new Date(row.key_created_at).getTime()) / (1000 * 60 * 60 * 24);
+            if (ageDays > 180) {
+              oldKeys.push(`${row.name} (${Math.floor(ageDays)} days)`);
+            }
+          }
+        }
+
+        if (oldKeys.length > 0) {
+          lines.push(
+            "",
+            "=== Key Rotation ===",
+            `Keys older than 6 months:`,
+            ...oldKeys.map((k) => `  - ${k}`),
+            `Rotate with: create-brain-user.ts <name> --rotate`,
+          );
+        }
 
         if (errors.length > 0 || warnings.length > 0) {
           lines.push(

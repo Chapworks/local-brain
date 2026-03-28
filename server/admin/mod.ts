@@ -42,6 +42,7 @@ import {
   getActiveNotifications,
   dismissNotification,
   dismissAll,
+  recordExport,
 } from "../notifications.ts";
 import type { Notification } from "../notifications.ts";
 
@@ -797,6 +798,10 @@ export function createAdminApp(pool: Pool): Hono {
         });
 
         const md = `# Local Brain Export\n\n${result.rows.length} thoughts.\n\n${lines.join("\n---\n\n")}`;
+
+        // Track export for anti-lock-in reminders
+        recordExport(pool).catch(() => {});
+
         c.header("Content-Type", "text/markdown; charset=utf-8");
         c.header("Content-Disposition", "attachment; filename=local-brain-export.md");
         return c.body(md);
@@ -814,6 +819,9 @@ export function createAdminApp(pool: Pool): Hono {
           expires_at: t.expires_at,
         })),
       };
+
+      // Track export for anti-lock-in reminders
+      recordExport(pool).catch(() => {});
 
       c.header("Content-Type", "application/json; charset=utf-8");
       c.header("Content-Disposition", "attachment; filename=local-brain-export.json");

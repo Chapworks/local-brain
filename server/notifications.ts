@@ -126,16 +126,100 @@ export async function createNotification(
   }
 }
 
+// --- System metadata helpers ---
+
+/** Get a value from the system_meta table. */
+export async function getMeta(pool: Pool, key: string): Promise<string | null> {
+  const client = await pool.connect();
+  try {
+    const result = await client.queryObject<{ value: string }>(
+      "SELECT value FROM system_meta WHERE key = $1",
+      [key]
+    );
+    return result.rows[0]?.value || null;
+  } catch {
+    return null; // Table may not exist yet
+  } finally {
+    client.release();
+  }
+}
+
+/** Set a value in the system_meta table (upsert). */
+export async function setMeta(pool: Pool, key: string, value: string): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.queryObject(
+      `INSERT INTO system_meta (key, value, updated_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
+      [key, value]
+    );
+  } catch {
+    // Table may not exist yet — silently skip
+  } finally {
+    client.release();
+  }
+}
+
+/** Record that an export was performed. */
+export async function recordExport(pool: Pool): Promise<void> {
+  await setMeta(pool, "last_export_at", new Date().toISOString());
+}
+
+/** Record backup verification result. */
+export async function recordBackupVerification(
+  pool: Pool,
+  passed: boolean,
+  details: string
+): Promise<void> {
+  await setMeta(pool, "last_backup_verify_at", new Date().toISOString());
+  await setMeta(pool, "last_backup_verify_result", passed ? "pass" : "fail");
+  await setMeta(pool, "last_backup_verify_details", details);
+
+  if (!passed) {
+    await createNotification(pool, {
+      level: "error",
+      title: "Backup verification failed",
+      message: `The most recent backup could not be restored: ${details}`,
+      source: "backup-verify",
+      link: "/admin/backups",
+    });
+  }
+}
+
+/** Store a fingerprint of the encryption key (SHA-256 hash of the key). */
+async function storeEncryptionKeyFingerprint(pool: Pool): Promise<void> {
+  const encryptionKey = Deno.env.get("BACKUP_ENCRYPTION_KEY");
+  if (!encryptionKey) return;
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(encryptionKey);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const fingerprint = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
+
+  const existing = await getMeta(pool, "encryption_key_fingerprint");
+  if (existing && existing !== fingerprint) {
+    await createNotification(pool, {
+      level: "error",
+      title: "Encryption key changed",
+      message: "Your BACKUP_ENCRYPTION_KEY has changed. Old backups encrypted with the previous key cannot be restored with the new key. Make sure you still have the old key stored safely.",
+      source: "encryption-key",
+      link: "/admin/config",
+    });
+  }
+
+  await setMeta(pool, "encryption_key_fingerprint", fingerprint);
+}
+
 /**
- * Run backup health checks and create notifications for problems.
+ * Run all health checks and create notifications for problems.
  * Called periodically by the MCP server cron.
  */
 export async function checkBackupHealth(pool: Pool): Promise<void> {
-  // Check if backups are configured at all
-  const backupCron = Deno.env.get("BACKUP_CRON");
   const dbPassword = Deno.env.get("DB_PASSWORD");
-
-  // If there's no DB_PASSWORD, we're probably not fully configured yet
   if (!dbPassword) return;
 
   // Check: is encryption enabled?
@@ -148,6 +232,22 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
       source: "backup-health",
       link: "/admin/config",
     });
+  } else {
+    // Track encryption key fingerprint — detect if key changes
+    await storeEncryptionKeyFingerprint(pool);
+
+    // First-run: warn user to store their key safely
+    const keyWarned = await getMeta(pool, "encryption_key_warned");
+    if (!keyWarned) {
+      await createNotification(pool, {
+        level: "warning",
+        title: "Store your encryption key safely",
+        message: "Your backups are encrypted with BACKUP_ENCRYPTION_KEY. If you lose this key, encrypted backups cannot be recovered. Write it down and store it somewhere safe — separate from this server.",
+        source: "encryption-key-warning",
+        link: "/admin/config",
+      });
+      await setMeta(pool, "encryption_key_warned", "true");
+    }
   }
 
   // Check: is cloud sync configured?
@@ -160,5 +260,88 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
       source: "backup-health",
       link: "/admin/backups",
     });
+  }
+
+  // Check: has a backup been verified recently?
+  const lastVerify = await getMeta(pool, "last_backup_verify_at");
+  if (!lastVerify) {
+    await createNotification(pool, {
+      level: "warning",
+      title: "Backups never verified",
+      message: "Your backups have never been tested with a restore. A backup that can't be restored is worthless. Verification runs weekly if configured.",
+      source: "backup-verify",
+      link: "/admin/backups",
+    });
+  } else {
+    const daysSinceVerify = (Date.now() - new Date(lastVerify).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceVerify > 14) {
+      await createNotification(pool, {
+        level: "warning",
+        title: "Backup verification overdue",
+        message: `Last verified ${Math.floor(daysSinceVerify)} days ago. Backups should be verified at least weekly.`,
+        source: "backup-verify",
+        link: "/admin/backups",
+      });
+    }
+  }
+
+  // Check: has data been exported recently? (anti-lock-in guarantee)
+  const lastExport = await getMeta(pool, "last_export_at");
+  const client = await pool.connect();
+  let thoughtCount = 0;
+  try {
+    const result = await client.queryObject<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM thoughts WHERE archived = FALSE"
+    );
+    thoughtCount = result.rows[0]?.count || 0;
+
+    // Check: are any MCP keys older than 6 months?
+    try {
+      const keyResult = await client.queryObject<{
+        name: string;
+        key_created_at: string | null;
+      }>(
+        "SELECT name, key_created_at FROM brain_users WHERE is_active = TRUE AND key_created_at IS NOT NULL"
+      );
+      for (const row of keyResult.rows) {
+        if (row.key_created_at) {
+          const ageDays = (Date.now() - new Date(row.key_created_at).getTime()) / (1000 * 60 * 60 * 24);
+          if (ageDays > 180) {
+            await createNotification(pool, {
+              level: "info",
+              title: `MCP key for "${row.name}" is ${Math.floor(ageDays)} days old`,
+              message: `Consider rotating the key with: create-brain-user.ts ${row.name} --rotate`,
+              source: "key-rotation",
+              link: "/admin/users",
+            });
+          }
+        }
+      }
+    } catch {
+      // brain_users table may not have key_created_at yet
+    }
+  } finally {
+    client.release();
+  }
+
+  if (thoughtCount > 0 && !lastExport) {
+    await createNotification(pool, {
+      level: "info",
+      title: "No data export on record",
+      message: `You have ${thoughtCount} thoughts but have never exported them. Exports protect you if the software changes or you want to move to something else.`,
+      source: "export-reminder",
+      link: "/admin/import-export",
+    });
+  } else if (thoughtCount > 0 && lastExport) {
+    const daysSinceExport = (Date.now() - new Date(lastExport).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceExport > 90) {
+      await createNotification(pool, {
+        level: "info",
+        title: "Data export overdue",
+        message: `Last export was ${Math.floor(daysSinceExport)} days ago. You have ${thoughtCount} active thoughts. Export periodically to ensure your data isn't locked in.`,
+        source: "export-reminder",
+        link: "/admin/import-export",
+      });
+    }
   }
 }

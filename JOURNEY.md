@@ -140,6 +140,11 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - `scripts/create-brain-user.ts` — CLI brain user creation with bcrypt key hashing
 - `migrations/` — incremental database schema migrations
 - `BACKUPS.md` — backup and restore guide (local, encrypted, cloud)
+- `VERSION` — semver version file (single source of truth)
+- `scripts/update.sh` — self-update script with version check and pre-migration backup
+- `scripts/verify-backup.sh` — automated backup verification (restore to temp DB, count data)
+- `server/scripts/create-brain-user.ts` — brain user + key rotation CLI (--rotate/--promote/--revoke-secondary)
+- `migrations/007_key_rotation_and_hardening.sql` — secondary key columns + system_meta table
 - `JOURNEY.md` — this file
 
 ---
@@ -164,7 +169,7 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - [ ] Create Cloudflare Tunnel (or Caddy for cloud)
 - [ ] Create `.env` with real credentials
 - [ ] `docker compose up -d` — first boot
-- [ ] Test all four MCP tools (capture, search, list, stats)
+- [ ] Test all nine MCP tools (capture, search, list, stats, connections, export, archive, usage, system health)
 - [ ] Connect Claude Code as MCP client
 - [ ] Write a Ship With Intent post about the journey
 - [ ] Release
@@ -179,6 +184,15 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - [x] **AI cost tracking** — per-request token and cost logging for all embedding and metadata API calls. Admin panel shows costs by operation, model, and day with bar chart visualization.
 - [x] **Automated backups** — scheduled pg_dump with gzip compression, optional GPG encryption, optional cloud sync via rclone. Supports Backblaze B2, Cloudflare R2, S3, and any rclone-compatible provider. Admin panel shows backup inventory with per-file cloud sync status.
 - [x] **Notification system** — persistent notification bar across all admin pages. Backup health checks run every 6 hours and create warnings for missing encryption or off-site storage. Notifications are dismissable per-user with deduplication by source and title.
+
+### Roadmap — Hardening (v1.0)
+
+- [x] **Backup verification** — `verify-backup.sh` spins up a temp PostgreSQL, restores the latest backup, and counts data to prove restorability.
+- [x] **Export reminders** — anti-lock-in guarantee. Health checks warn if data has never been exported or if the last export was 90+ days ago. Export timestamps tracked in system_meta.
+- [x] **Migration safety** — `update.sh` takes a pre-migration pg_dump before running schema migrations. Migrations already wrap in transactions with rollback.
+- [x] **Encryption key loss protection** — SHA-256 fingerprint of BACKUP_ENCRYPTION_KEY stored in system_meta. Health checks detect if the key changes and warn about old backups. First-run reminder to store the key safely.
+- [x] **MCP key rotation** — zero-downtime key rotation via secondary_key_hash. CLI supports `--rotate` (generate secondary), `--promote` (swap), `--revoke-secondary` (cancel). Both keys authenticate simultaneously during the rotation window. Health checks warn if keys are older than 6 months.
+- [x] **Versioning and updates** — `VERSION` file with semver, `update.sh` script, `system_health` MCP tool reports version and checks for GitHub releases.
 
 ### Roadmap — What's Left
 
@@ -215,3 +229,5 @@ This matters more for self-hosted software than for anything else. There's no op
 - Nick is outside working on the trailer while all of this is happening. He's multitasking — physical work with his hands, product development on his phone between tasks. The mental model here isn't "sitting at a desk building software." It's "having a conversation with an AI that happens to produce a deployable product." The barrier to building isn't access to a computer. It's having the idea and knowing what to ask for.
 - The project went from "what is Open Brain?" to a public GitHub repo with architecture diagrams, five spec files, a contributing guide, two deployment paths, and a roadmap — in a single day, from a phone, while working on a trailer. The commit history tells the story: 7 commits, each one a coherent step forward. No false starts, no reverts. The AI maintained the thread across context boundaries and sessions.
 - "We vibe coded this" — Nick's framing is honest and deliberate. The specs came after the code. This is the opposite of traditional software engineering, and it worked. The specs exist to help the next person (or AI) understand what was built, not to justify what was planned. That's a different kind of documentation.
+- **"How do I harden this?"** — After the backup system, notification system, health tool, and versioning were all built and pushed, Nick asked a question that had nothing to do with code: "Make five recommendations on how I can harden this solution even more. Harden it from entropy or security. Or just letting people down because it lost their data or locked their data in." This is the question of someone who has shipped things before. Not "what features should I add?" but "what will go wrong in two years?" The five recommendations that came back — backup verification (prove restores work), export reminders (the anti-lock-in guarantee), migration rollback safety, encryption key loss protection, and MCP key rotation — are all about entropy, not features. None of them make the product more impressive. All of them make it more trustworthy. The fact that this question came from the founder, unprompted, after a building sprint, says something about what kind of product Local Brain is trying to be. It's not trying to be clever. It's trying to still be running.
+- **"Add those" — the ambiguity lesson.** Nick asked Claude for 5 feature ideas. Claude proposed thought connections, digests, archiving, import/export, and multi-user. Nick said something like "add those." He meant: build them. Write the code. But "add those" is ambiguous — it could mean add them to the roadmap, add them to the README, or implement them. Claude took the safer interpretation and added them to the roadmap as bullet points. No code was written. Nick didn't correct it at the time; the conversation moved on. In a later session, he asked to implement the roadmap, and Claude built all five features plus three more. The code got written eventually, but the moment is worth documenting because it reveals something about this workflow. In a terminal session with Claude Code, the AI asks clarifying questions constantly — "Did you mean X or Y?" "Should I also do Z?" In Claudegram, on a phone, that friction is different. The conversation moves faster. The AI doesn't stop to interrogate every ambiguous instruction. It picks a path and goes. Sometimes that path is wrong. Sometimes it's the safer choice and you end up where you needed to be anyway, just with an extra step. Nick is learning that the same words mean different things depending on the interface. "Add those" in a terminal, with a blinking cursor and a diff preview, is unambiguous. "Add those" in a chat message, between other tasks, while you're outside — that's a coin flip. The lesson isn't that the AI should have asked. The lesson is that the person giving instructions through a chat interface has to be more precise than they think, or be ready to accept the AI's best guess and course-correct later. This is a new skill. Nobody teaches it yet.

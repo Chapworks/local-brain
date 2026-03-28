@@ -76,6 +76,14 @@ fi
 
 docker compose -f "$COMPOSE_FILE" build --no-cache mcp-server db-backup
 
+# --- Pre-migration backup ---
+echo ""
+echo "Taking pre-migration database backup..."
+docker compose -f "$COMPOSE_FILE" exec postgres pg_dump -U localbrain localbrain \
+  | gzip > "$PROJECT_DIR/backups/pre-update-$(date +%Y%m%d_%H%M%S).sql.gz" 2>/dev/null \
+  && echo "Backup saved to backups/pre-update-*.sql.gz" \
+  || echo "Warning: pre-migration backup failed. Proceeding anyway."
+
 # --- Run migrations ---
 echo ""
 echo "Running database migrations..."

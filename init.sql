@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS brain_users (
     name TEXT NOT NULL,
     mcp_key_hash TEXT NOT NULL,
     key_prefix TEXT NOT NULL DEFAULT '',
+    secondary_key_hash TEXT,
+    secondary_key_prefix TEXT,
+    key_created_at TIMESTAMPTZ,
+    secondary_key_created_at TIMESTAMPTZ,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -110,5 +114,12 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_dismissed ON notifications (dismissed, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_source ON notifications (source);
 
+-- System metadata (operational tracking — last export, backup verification, key fingerprints)
+CREATE TABLE IF NOT EXISTS system_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Mark all migrations as applied (fresh install has full schema)
-INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6) ON CONFLICT DO NOTHING;
+INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6), (7) ON CONFLICT DO NOTHING;
