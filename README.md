@@ -108,15 +108,24 @@ A built-in web dashboard for managing your Local Brain instance:
 
 Access at `http://localhost:8000/admin` (local-only by default). See [ADMIN.md](ADMIN.md) for setup.
 
-## Home Hosting Options
+## Hosting Options
 
-See [HOME-HOSTING.md](HOME-HOSTING.md) for detailed options on running this from a computer in your house and making it accessible on the internet. Default recommendation: Cloudflare Tunnel.
+### Home machine (recommended)
+
+Run on a computer in your house. Your data never leaves your network. Use a Cloudflare Tunnel for secure remote access without exposing your IP.
+
+- [HOME-HOSTING.md](HOME-HOSTING.md) — overview of home hosting approaches
+- [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md) — recommended home setup
+
+### Cloud VM
+
+Run on a Linode, DigitalOcean, Hetzner, or AWS EC2 instance. Caddy handles HTTPS via Let's Encrypt. Simpler networking, but your data lives on someone else's server.
+
+- [CLOUD-HOSTING.md](CLOUD-HOSTING.md) — full cloud setup guide with firewall, Caddy, and security checklist
 
 ## Setup
 
 See [SETUP.md](SETUP.md) for step-by-step installation instructions.
-
-See [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md) for Cloudflare Tunnel setup.
 
 ## Upstream
 

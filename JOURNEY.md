@@ -112,13 +112,15 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - [x] Admin web panel (dashboard, thoughts browser, config, logs, restarts)
 - [x] Auth system (bcrypt + JWT, CLI user management, rate limiting)
 - [x] Docker socket proxy for safe container operations
+- [x] Public GitHub repo — github.com/Chapworks/local-brain
+- [x] Prerequisites and system requirements documented
+- [x] Cloud VM hosting guide with Caddy + Let's Encrypt
 - [ ] Set up the Linux host (Docker, Docker Compose)
-- [ ] Create Cloudflare Tunnel
+- [ ] Create Cloudflare Tunnel (or Caddy for cloud)
 - [ ] Create `.env` with real credentials
 - [ ] `docker compose up -d` — first boot
 - [ ] Test all four MCP tools (capture, search, list, stats)
 - [ ] Connect Claude Code as MCP client
-- [ ] Create a public GitHub repo
 - [ ] Write a Ship With Intent post about the journey
 - [ ] Release
 
