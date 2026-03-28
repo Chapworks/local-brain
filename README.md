@@ -24,11 +24,22 @@ Based on the OB1 Kubernetes self-hosted variant, simplified for a single-machine
 - SSD (faster vector search on large datasets)
 - Always-on machine (so your MCP tools can always reach it)
 
+### Operating System
+
+- **Linux** — Ubuntu 20.04+, Debian 11+, Fedora 38+, or any distro with a modern kernel
+- **macOS** — 12 Monterey or later (Docker Desktop)
+- **Windows** — 10/11 with WSL2 (Docker Desktop)
+- Kernel 4.x+ required (for Docker and pgvector)
+
 ### Software
 
-- **Docker** and **Docker Compose** — that's it. Everything else runs in containers.
-  - Install: https://docs.docker.com/engine/install/
-  - Docker Compose v2 is included with modern Docker installs
+- **Git** — to clone the repo (`sudo apt install git` / `brew install git`)
+- **Docker Engine 20.10+** and **Docker Compose v2** — everything else runs in containers
+  - Linux install: https://docs.docker.com/engine/install/
+  - Mac/Windows: Docker Desktop includes both
+  - Verify: `docker --version` and `docker compose version`
+- **openssl** — for generating secrets (pre-installed on most systems)
+- **curl** — for testing (pre-installed on most systems)
 
 ### External Accounts (free tiers work)
 
