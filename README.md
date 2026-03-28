@@ -1,12 +1,12 @@
 # Local Brain
 
-A self-hosted fork of [OB1 (Open Brain)](https://github.com/NateBJones-Projects/OB1) that runs entirely on your own hardware. No Supabase, no cloud dependencies for data storage. Your brain stays on your machine.
+A self-hosted fork of [OB1 (Open Brain)](https://github.com/NateBJones-Projects/OB1). You bring your own LLM API key (OpenAI, Anthropic, or OpenRouter). Your thought content is sent to the AI provider for embedding and classification, but nothing is stored there — all data lives in your own PostgreSQL database. No Supabase, no cloud storage, no third-party databases. Your brain runs on your hardware.
 
 ## What This Is
 
 A personal knowledge and memory layer that any MCP-compatible AI tool (Claude Code, Claude Desktop, Cursor, etc.) can read from and write to. One database, one server, accessible from anywhere via HTTPS.
 
-Open Brain is cloud-first. Local Brain is yours-first. Same four MCP tools, same PostgreSQL + pgvector foundation, but the data never leaves your house.
+Open Brain is cloud-first. Local Brain is yours-first. Same four MCP tools, same PostgreSQL + pgvector foundation, but all storage is local. Thought content passes through your AI provider's API for embedding and metadata extraction, then the results are stored on your machine. The provider processes but does not retain your data.
 
 Based on the OB1 Kubernetes self-hosted variant, simplified for a single-machine Docker Compose deployment.
 
@@ -85,7 +85,8 @@ Based on the OB1 Kubernetes self-hosted variant, simplified for a single-machine
 - Access key authentication (shared secret over HTTPS)
 - Cloudflare Tunnel — outbound-only connection, no inbound ports, home IP hidden
 - PostgreSQL only listens on localhost (not exposed to internet)
-- No cloud data storage — everything stays on your machine
+- No cloud data storage — thought content is sent to your AI provider for processing but all data is stored locally
+- Automated encrypted backups with cloud storage — see [BACKUPS.md](BACKUPS.md)
 
 ## Admin Panel
 
@@ -103,7 +104,7 @@ Access at `http://localhost:8000/admin` (local-only by default). See [ADMIN.md](
 
 ### Home machine (recommended)
 
-Run on a computer in your house. Your data never leaves your network. Use a Cloudflare Tunnel for secure remote access without exposing your IP.
+Run on a computer in your house. All data is stored on your local network. Thought content is sent to your AI provider for processing (embedding and classification) but is not stored there. Use a Cloudflare Tunnel for secure remote access without exposing your IP.
 
 - [HOME-HOSTING.md](HOME-HOSTING.md) — overview of home hosting approaches
 - [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md) — recommended home setup

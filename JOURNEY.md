@@ -123,6 +123,23 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 - `specs/admin-panel.md` — admin panel spec
 - `specs/environment.md` — environment variables spec
 - `specs/security.md` — security spec
+- `server/admin/pages/graph.tsx` — thought connections force-directed graph
+- `server/admin/pages/users.tsx` — brain user management
+- `server/admin/pages/import-export.tsx` — import/export with multi-format parsing
+- `server/admin/pages/digests.tsx` — scheduled digest configuration
+- `server/admin/pages/usage.tsx` — AI cost tracking with bar charts
+- `server/admin/pages/backups.tsx` — backup inventory with cloud sync status
+- `server/digest.ts` — scheduled digest generation and webhook delivery
+- `server/import-parsers.ts` — JSON, Markdown, CSV import parsing
+- `server/usage.ts` — AI API cost tracking and estimation
+- `server/user-scope.ts` — per-user query scoping for multi-user isolation
+- `server/notifications.ts` — notification system with backup health checks
+- `scripts/backup.sh` — 3-stage backup pipeline (dump, encrypt, cloud sync)
+- `scripts/restore.sh` — backup restoration with auto-download and decryption
+- `scripts/Dockerfile.backup` — custom backup container (PostgreSQL + rclone + GPG)
+- `scripts/create-brain-user.ts` — CLI brain user creation with bcrypt key hashing
+- `migrations/` — incremental database schema migrations
+- `BACKUPS.md` — backup and restore guide (local, encrypted, cloud)
 - `JOURNEY.md` — this file
 
 ---
@@ -154,11 +171,35 @@ The admin panel adds zero new external UI frameworks. Hono JSX renders everythin
 
 ### Roadmap — Future Features
 
-- [ ] **Thought connections / graph view** — auto-link each thought to its 3 most similar existing thoughts by embedding distance. Admin panel gets a graph visualization showing clusters of related ideas.
-- [ ] **Scheduled digests** — daily/weekly summary of captured thoughts via email or webhook. Top topics, open action items, people mentioned. Runs as a cron job inside the container.
-- [ ] **Thought expiration and archiving** — optional TTL per thought. Scratch thoughts auto-archive after a configurable period. Admin panel gets an Archive tab. Keeps active dataset lean for faster search.
-- [ ] **Import/export** — import from Apple Notes, Obsidian, markdown files, or CSV. Export entire brain as JSON or markdown. The "no lock-in" feature.
-- [ ] **Multi-user with isolated brains** — per-user namespaces, separate thoughts and embeddings, per-user MCP access keys. Share one instance without seeing each other's data.
+- [x] **Thought connections / graph view** — auto-link each thought to its 3 most similar existing thoughts by embedding distance. Admin panel gets a force-directed graph visualization showing clusters of related ideas.
+- [x] **Scheduled digests** — daily/weekly summary of captured thoughts via webhook. Top topics, open action items, people mentioned. Runs as a Deno.cron job inside the container.
+- [x] **Thought expiration and archiving** — optional TTL per thought. Scratch thoughts auto-archive after a configurable period. Admin panel shows archive/TTL controls per thought. Keeps active dataset lean for faster search.
+- [x] **Import/export** — import from JSON, Markdown, or CSV files. Export entire brain as JSON or markdown. The "no lock-in" feature. Admin panel has a dedicated page.
+- [x] **Multi-user with isolated brains** — per-user namespaces, separate thoughts and embeddings, per-user MCP access keys via bcrypt-hashed keys with prefix lookup. Share one instance without seeing each other's data.
+- [x] **AI cost tracking** — per-request token and cost logging for all embedding and metadata API calls. Admin panel shows costs by operation, model, and day with bar chart visualization.
+- [x] **Automated backups** — scheduled pg_dump with gzip compression, optional GPG encryption, optional cloud sync via rclone. Supports Backblaze B2, Cloudflare R2, S3, and any rclone-compatible provider. Admin panel shows backup inventory with per-file cloud sync status.
+- [x] **Notification system** — persistent notification bar across all admin pages. Backup health checks run every 6 hours and create warnings for missing encryption or off-site storage. Notifications are dismissable per-user with deduplication by source and title.
+
+### Roadmap — What's Left
+
+- [ ] **Multi-user with isolated brains (phase 2)** — admin UI for creating brain users (currently CLI-only)
+- [ ] **Thought connections graph (phase 2)** — similarity threshold tuning, cluster labeling, time-based filtering
+
+---
+
+## Operational Awareness
+
+Nick has built systems like this before. He knows how they degrade.
+
+The pattern is always the same: someone sets up backups once, confirms they run, and never checks again. Six months later the disk fills up, the cron job silently fails, the encryption key gets rotated without re-encrypting old backups, or the cloud credentials expire. The system looks healthy from the outside. The backups are worthless.
+
+This is why Local Brain doesn't just have a backup script — it has a backup page in the admin panel that shows every backup file, its size, its date, whether it's encrypted, and whether it made it to the cloud. You can see at a glance if something is wrong. You don't have to SSH into the machine and run `ls -la /backups` to find out.
+
+And that's why there's a notification system. The server checks backup health every 6 hours. If encryption isn't enabled, you get a warning. If off-site storage isn't configured, you get a warning. The notification bar appears on every admin page until you dismiss it or fix the problem. You can't miss it.
+
+The philosophy: **if it's not visible, it's not working.** A backup that nobody monitors is a backup that will fail when you need it. A health check that doesn't surface its results is a health check that doesn't exist. The admin panel isn't just a dashboard — it's the mechanism that keeps the system honest over time.
+
+This matters more for self-hosted software than for anything else. There's no ops team. There's no PagerDuty. There's just you and a machine in your house. The software has to tell you when something needs attention, because nobody else will.
 
 ---
 

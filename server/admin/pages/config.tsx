@@ -2,6 +2,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import type { LayoutNotification } from "./layout.tsx";
 
 interface ConfigEntry {
   key: string;
@@ -12,15 +13,16 @@ interface ConfigEntry {
 
 interface Props {
   user: string;
+  notifications?: LayoutNotification[];
   config: ConfigEntry[];
   flash?: { type: "success" | "error"; message: string };
 }
 
-export const ConfigPage: FC<Props> = ({ user, config, flash }) => {
+export const ConfigPage: FC<Props> = ({ user, notifications, config, flash }) => {
   const sections = [...new Set(config.map((c) => c.section))];
 
   return (
-    <Layout title="Configuration" user={user}>
+    <Layout title="Configuration" user={user} notifications={notifications}>
       <h1 style="font-size:1.5rem; margin-bottom:1rem">Configuration</h1>
 
       {flash && (
@@ -59,7 +61,7 @@ export const ConfigPage: FC<Props> = ({ user, config, flash }) => {
           </div>
         ))}
 
-        <div style="display:flex; gap:0.75rem; margin-top:1rem">
+        <div style="display:flex; gap:0.75rem; margin-top:1rem; flex-wrap:wrap">
           <button type="submit" class="btn btn-primary">
             Save Configuration
           </button>
@@ -70,6 +72,14 @@ export const ConfigPage: FC<Props> = ({ user, config, flash }) => {
             class="btn btn-danger"
           >
             Save &amp; Restart MCP Server
+          </button>
+          <button
+            type="submit"
+            name="_restart_backup"
+            value="1"
+            class="btn btn-danger"
+          >
+            Save &amp; Restart Backup Service
           </button>
         </div>
       </form>

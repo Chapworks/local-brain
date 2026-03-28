@@ -1,0 +1,12 @@
+FROM postgres:16-alpine
+
+# rclone — cloud storage sync (supports S3, B2, R2, GCS, SFTP, 50+ providers)
+# gpg — symmetric encryption for backup files
+# No other dependencies.
+RUN apk add --no-cache rclone gnupg
+
+COPY scripts/backup.sh /usr/local/bin/backup.sh
+COPY scripts/restore.sh /usr/local/bin/restore.sh
+RUN chmod +x /usr/local/bin/backup.sh /usr/local/bin/restore.sh
+
+VOLUME /backups

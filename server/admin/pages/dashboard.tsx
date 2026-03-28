@@ -2,26 +2,43 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import type { LayoutNotification } from "./layout.tsx";
 
 interface Stats {
   totalThoughts: number;
+  archivedThoughts: number;
   types: Record<string, number>;
   topTopics: [string, number][];
   dateRange: string;
   services: { name: string; status: string; uptime: string }[];
+  brainUsers: number;
+  connections: number;
 }
 
-export const DashboardPage: FC<{ user: string; stats: Stats }> = ({
+export const DashboardPage: FC<{ user: string; stats: Stats; notifications?: LayoutNotification[] }> = ({
   user,
   stats,
+  notifications,
 }) => (
-  <Layout title="Dashboard" user={user}>
+  <Layout title="Dashboard" user={user} notifications={notifications}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Dashboard</h1>
 
     <div class="grid grid-3">
       <div class="card stat">
         <div class="value">{stats.totalThoughts}</div>
-        <div class="label">Total Thoughts</div>
+        <div class="label">Active Thoughts</div>
+      </div>
+      <div class="card stat">
+        <div class="value">{stats.archivedThoughts}</div>
+        <div class="label">Archived</div>
+      </div>
+      <div class="card stat">
+        <div class="value">{stats.connections}</div>
+        <div class="label">Connections</div>
+      </div>
+      <div class="card stat">
+        <div class="value">{stats.brainUsers}</div>
+        <div class="label">Brain Users</div>
       </div>
       <div class="card stat">
         <div class="value">{Object.keys(stats.types).length}</div>
