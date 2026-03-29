@@ -12,8 +12,13 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_BASE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        run: echo "IMAGE_BASE=${IMAGE_BASE,,}" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -36,8 +41,8 @@ jobs:
           context: ./server
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ env.IMAGE_BASE }}:${{ github.ref_name }}
+            ${{ env.IMAGE_BASE }}:latest
 
       - name: Build and push backup image
         uses: docker/build-push-action@v5
@@ -46,5 +51,5 @@ jobs:
           file: ./scripts/Dockerfile.backup
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}-backup:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}-backup:latest
+            ${{ env.IMAGE_BASE }}-backup:${{ github.ref_name }}
+            ${{ env.IMAGE_BASE }}-backup:latest
