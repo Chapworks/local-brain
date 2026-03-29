@@ -170,7 +170,7 @@ try {
     console.log(`  Key Prefix:     ${prefix}`);
     console.log(`\n  Save this key now — it cannot be retrieved later.`);
     console.log(
-      `  Use this key in the x-brain-key header or ?key= param when connecting MCP clients.`
+      `  Use this key in the x-brain-key header when connecting MCP clients.`
     );
     console.log(`\n  For zero-downtime rotation later, use: create-brain-user.ts ${name} --rotate\n`);
   }

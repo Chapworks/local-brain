@@ -6,10 +6,7 @@ Local Brain exposes nine MCP tools via the Streamable HTTP Transport protocol. A
 
 ## Authentication
 
-Every request to the MCP endpoint requires an access key, provided via:
-
-- `x-brain-key` HTTP header, OR
-- `key` query parameter (e.g., `?key=YOUR_KEY`)
+Every request to the MCP endpoint requires an access key, provided via the `x-brain-key` HTTP header.
 
 Requests without a valid key receive `401 { error: "Invalid or missing access key" }`.
 

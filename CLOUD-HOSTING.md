@@ -167,15 +167,9 @@ curl https://brain.yourdomain.com/
 
 Connect your MCP client:
 
-```json
-{
-  "mcpServers": {
-    "local-brain": {
-      "type": "url",
-      "url": "https://brain.yourdomain.com/?key=YOUR_MCP_ACCESS_KEY"
-    }
-  }
-}
+```bash
+claude mcp add --transport http local-brain "https://brain.yourdomain.com/" \
+  --header "x-brain-key: YOUR_MCP_ACCESS_KEY"
 ```
 
 ## Security Checklist

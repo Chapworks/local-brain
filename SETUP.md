@@ -106,13 +106,15 @@ See [ADMIN.md](ADMIN.md) for more details on the admin panel, including remote a
 **Remote access (via Cloudflare Tunnel):**
 
 ```bash
-claude mcp add --transport http local-brain "https://brain.yourdomain.com/?key=YOUR_MCP_ACCESS_KEY"
+claude mcp add --transport http local-brain "https://brain.yourdomain.com/" \
+  --header "x-brain-key: YOUR_MCP_ACCESS_KEY"
 ```
 
 **Localhost only:**
 
 ```bash
-claude mcp add --transport http local-brain "http://localhost:8000/?key=YOUR_MCP_ACCESS_KEY"
+claude mcp add --transport http local-brain "http://localhost:8000/" \
+  --header "x-brain-key: YOUR_MCP_ACCESS_KEY"
 ```
 
 ### Claude Desktop
