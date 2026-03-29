@@ -28,6 +28,9 @@ import {
 import { parseImport } from "../import-parsers.ts";
 import { isValidWebhookUrl } from "../digest.ts";
 
+/** JSON replacer that converts BigInt to Number (safe for IDs under 2^53). */
+const bigIntReplacer = (_k: string, v: unknown) => typeof v === "bigint" ? Number(v) : v;
+
 // --- Page renderers ---
 import { LoginPage } from "./pages/login.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
@@ -421,7 +424,7 @@ export function createAdminApp(pool: Pool): Hono {
         );
       }
 
-      userId = row.id;
+      userId = Number(row.id);
       isSuperuser = row.is_superuser;
 
       // Update last_active_at on login
@@ -840,7 +843,7 @@ export function createAdminApp(pool: Pool): Hono {
         [authUser.id]
       );
 
-      const nodeIds = new Set(nodesResult.rows.map((n) => n.id));
+      const nodeIds = new Set(nodesResult.rows.map((n) => Number(n.id)));
 
       const linksResult = await client.queryObject<{
         source: number;
@@ -859,13 +862,13 @@ export function createAdminApp(pool: Pool): Hono {
 
       // Only include links where both nodes are in the node set
       const links = linksResult.rows.filter(
-        (l) => nodeIds.has(l.source) && nodeIds.has(l.target)
+        (l) => nodeIds.has(Number(l.source)) && nodeIds.has(Number(l.target))
       );
 
       const graphData = JSON.stringify({
         nodes: nodesResult.rows,
         links,
-      });
+      }, bigIntReplacer);
 
       return c.html(
         (<GraphPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} graphData={graphData} />) as unknown as string
@@ -938,7 +941,7 @@ export function createAdminApp(pool: Pool): Hono {
       if (format === "markdown") {
         const lines = result.rows.map((t) => {
           const m = t.metadata || {};
-          const header = `## Thought #${t.id} — ${new Date(t.created_at).toISOString().slice(0, 10)}`;
+          const header = `## Thought #${Number(t.id)} — ${new Date(t.created_at).toISOString().slice(0, 10)}`;
           const meta = [];
           if (m.type) meta.push(`Type: ${m.type}`);
           if (Array.isArray(m.topics) && m.topics.length)
@@ -974,7 +977,7 @@ export function createAdminApp(pool: Pool): Hono {
 
       c.header("Content-Type", "application/json; charset=utf-8");
       c.header("Content-Disposition", "attachment; filename=local-brain-export.json");
-      return c.body(JSON.stringify(exported, null, 2));
+      return c.body(JSON.stringify(exported, bigIntReplacer, 2));
     } finally {
       client.release();
     }

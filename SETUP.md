@@ -187,7 +187,10 @@ Pull the latest code and rebuild:
 git pull
 docker compose build
 docker compose up -d
+docker compose exec mcp-server deno run -A scripts/migrate.ts
 ```
+
+The migration script applies any new database migrations since your last update. It's safe to run repeatedly — it tracks which migrations have already been applied.
 
 The PostgreSQL data persists in a Docker volume (`pgdata`). Rebuilding containers does not destroy your data.
 

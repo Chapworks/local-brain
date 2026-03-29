@@ -85,6 +85,9 @@ if (MCP_ACCESS_KEY) {
 const TOP_N_LINKS = 3;
 const MIN_LINK_SIMILARITY = 0.3;
 
+/** JSON replacer that converts BigInt to Number (safe for IDs under 2^53). */
+const bigIntReplacer = (_k: string, v: unknown) => typeof v === "bigint" ? Number(v) : v;
+
 // --- PostgreSQL Connection Pool ---
 
 const pool = new Pool({
@@ -907,7 +910,7 @@ server.registerTool(
         if (format === "markdown") {
           const lines = result.rows.map((t) => {
             const m = t.metadata || {};
-            const header = `## Thought #${t.id} — ${new Date(t.created_at).toISOString().slice(0, 10)}`;
+            const header = `## Thought #${Number(t.id)} — ${new Date(t.created_at).toISOString().slice(0, 10)}`;
             const meta = [];
             if (m.type) meta.push(`Type: ${m.type}`);
             if (Array.isArray(m.topics) && m.topics.length)
@@ -939,7 +942,7 @@ server.registerTool(
         return {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(exported, null, 2),
+            text: JSON.stringify(exported, bigIntReplacer, 2),
           }],
         };
       } finally {
