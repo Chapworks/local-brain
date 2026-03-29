@@ -103,19 +103,47 @@ See [ADMIN.md](ADMIN.md) for more details on the admin panel, including remote a
 
 ### Claude Code
 
+These commands install the MCP server globally (available in all Claude Code sessions). To install for a single project only, add `--scope project` instead of `--scope user`.
+
 **Remote access (via Cloudflare Tunnel):**
 
 ```bash
-claude mcp add --transport http local-brain "https://brain.yourdomain.com/" \
+claude mcp add --transport http --scope user local-brain \
+  "https://brain.yourdomain.com/" \
   --header "x-brain-key: YOUR_MCP_ACCESS_KEY"
 ```
 
 **Localhost only:**
 
 ```bash
-claude mcp add --transport http local-brain "http://localhost:8000/" \
+claude mcp add --transport http --scope user local-brain \
+  "http://localhost:8000/" \
   --header "x-brain-key: YOUR_MCP_ACCESS_KEY"
 ```
+
+**Auto-approve MCP tools (optional):**
+
+By default, Claude Code prompts you to approve each MCP tool call. To skip these prompts, add the tools to your global permission allow-list in `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__local-brain__capture_thought",
+      "mcp__local-brain__search_thoughts",
+      "mcp__local-brain__list_thoughts",
+      "mcp__local-brain__archive_thought",
+      "mcp__local-brain__get_thought_connections",
+      "mcp__local-brain__export_thoughts",
+      "mcp__local-brain__thought_stats",
+      "mcp__local-brain__usage_stats",
+      "mcp__local-brain__system_health"
+    ]
+  }
+}
+```
+
+If the file already has a `permissions.allow` array, merge these entries into it rather than replacing it.
 
 ### Claude Desktop
 
