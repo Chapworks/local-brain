@@ -2,7 +2,7 @@
  * Authentication utilities — bcrypt password hashing and JWT session tokens.
  */
 
-import * as bcrypt from "bcrypt";
+import bcrypt from "bcrypt";
 import { SignJWT, jwtVerify } from "jose";
 
 // CR-05: Refuse to start with default/missing JWT secret

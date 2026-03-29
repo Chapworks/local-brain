@@ -8,7 +8,7 @@
     "hono": "npm:hono@4.9.2",
     "zod": "npm:zod@4.1.13",
     "postgres": "https://deno.land/x/postgres@v0.19.3/mod.ts",
-    "bcrypt": "https://deno.land/x/bcrypt@v0.4.1/mod.ts",
+    "bcrypt": "npm:bcryptjs@2.4.3",
     "jose": "npm:jose@5.9.6"
   },
   "compilerOptions": {

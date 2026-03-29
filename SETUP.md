@@ -103,32 +103,16 @@ See [ADMIN.md](ADMIN.md) for more details on the admin panel, including remote a
 
 ### Claude Code
 
-Add to your project or user MCP settings:
-
 **Remote access (via Cloudflare Tunnel):**
 
-```json
-{
-  "mcpServers": {
-    "local-brain": {
-      "type": "url",
-      "url": "https://brain.yourdomain.com/?key=YOUR_MCP_ACCESS_KEY"
-    }
-  }
-}
+```bash
+claude mcp add --transport http local-brain "https://brain.yourdomain.com/?key=YOUR_MCP_ACCESS_KEY"
 ```
 
 **Localhost only:**
 
-```json
-{
-  "mcpServers": {
-    "local-brain": {
-      "type": "url",
-      "url": "http://localhost:8000/?key=YOUR_MCP_ACCESS_KEY"
-    }
-  }
-}
+```bash
+claude mcp add --transport http local-brain "http://localhost:8000/?key=YOUR_MCP_ACCESS_KEY"
 ```
 
 ### Claude Desktop

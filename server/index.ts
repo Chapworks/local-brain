@@ -30,8 +30,8 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { z } from "zod";
 import { Pool } from "postgres";
-import * as bcrypt from "bcrypt";
-import { createAdminApp } from "./admin/mod.ts";
+import bcrypt from "bcrypt";
+import { createAdminApp } from "./admin/mod.tsx";
 import { processDigests } from "./digest.ts";
 import { checkBackupHealth, getActiveNotifications, getMeta, recordExport } from "./notifications.ts";
 import {

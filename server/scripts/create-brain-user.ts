@@ -16,7 +16,7 @@
  */
 
 import { Pool } from "postgres";
-import * as bcrypt from "bcrypt";
+import bcrypt from "bcrypt";
 
 const pool = new Pool(
   {

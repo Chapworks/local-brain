@@ -20,6 +20,9 @@ COPY server/scripts/ ./scripts/
 COPY VERSION ./
 COPY migrations/ /app/migrations/
 
+# Ensure deno user can write to cache and lockfile (bcrypt worker needs it)
+RUN chown -R deno:deno /deno-dir /app
+
 # Run as non-root
 USER deno
 

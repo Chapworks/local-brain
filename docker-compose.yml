@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: ankane/pgvector:v0.8.0
+    image: ankane/pgvector:latest
     restart: unless-stopped
     environment:
       POSTGRES_DB: localbrain
