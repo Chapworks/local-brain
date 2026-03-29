@@ -48,7 +48,7 @@ jobs:
       - name: Build and push backup image
         uses: docker/build-push-action@v5
         with:
-          context: ./scripts
+          context: .
           file: ./scripts/Dockerfile.backup
           push: true
           tags: |
