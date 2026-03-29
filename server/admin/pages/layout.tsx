@@ -19,11 +19,13 @@ const LEVEL_STYLES: Record<string, { bg: string; border: string; color: string; 
 export const Layout: FC<{
   title: string;
   user?: string;
+  isSuperuser?: boolean;
   version?: string;
   notifications?: LayoutNotification[];
 }> = ({
   title,
   user,
+  isSuperuser,
   version,
   notifications,
   children,
@@ -99,13 +101,14 @@ export const Layout: FC<{
         <a href="/admin">Dashboard</a>
         <a href="/admin/thoughts">Thoughts</a>
         <a href="/admin/graph">Graph</a>
-        <a href="/admin/users">Users</a>
+        {isSuperuser && <a href="/admin/users">Users</a>}
         <a href="/admin/import-export">Import/Export</a>
         <a href="/admin/digests">Digests</a>
         <a href="/admin/usage">AI Costs</a>
-        <a href="/admin/backups">Backups</a>
-        <a href="/admin/config">Config</a>
-        <a href="/admin/logs">Logs</a>
+        {isSuperuser && <a href="/admin/backups">Backups</a>}
+        {isSuperuser && <a href="/admin/config">Config</a>}
+        {isSuperuser && <a href="/admin/logs">Logs</a>}
+        <a href="/admin/account">Account</a>
         <span class="spacer" />
         {user && (
           <>

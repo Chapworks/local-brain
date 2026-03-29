@@ -42,16 +42,18 @@ Deno.test("hashPassword — same input produces different hashes (salt)", async 
 // --- createToken & verifyToken ---
 
 Deno.test("createToken — returns a JWT string", async () => {
-  const token = await createToken("admin");
+  const token = await createToken(1, "admin", true);
   assertEquals(typeof token, "string");
   // JWT has 3 parts separated by dots
   assertEquals(token.split(".").length, 3);
 });
 
-Deno.test("verifyToken — valid token returns payload with sub", async () => {
-  const token = await createToken("testuser");
+Deno.test("verifyToken — valid token returns payload with sub, uid, su", async () => {
+  const token = await createToken(42, "testuser", false);
   const payload = await verifyToken(token);
   assertEquals(payload!.sub, "testuser");
+  assertEquals(payload!.uid, 42);
+  assertEquals(payload!.su, false);
 });
 
 Deno.test("verifyToken — invalid token returns null", async () => {
@@ -60,7 +62,7 @@ Deno.test("verifyToken — invalid token returns null", async () => {
 });
 
 Deno.test("verifyToken — tampered token returns null", async () => {
-  const token = await createToken("user");
+  const token = await createToken(1, "user", false);
   const tampered = token.slice(0, -5) + "XXXXX";
   const result = await verifyToken(tampered);
   assertEquals(result, null);

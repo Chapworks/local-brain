@@ -33,8 +33,12 @@ export async function verifyPassword(
   return await bcrypt.compare(plain, hash);
 }
 
-export async function createToken(username: string): Promise<string> {
-  return await new SignJWT({ sub: username })
+export async function createToken(
+  userId: number,
+  username: string,
+  isSuperuser: boolean
+): Promise<string> {
+  return await new SignJWT({ sub: username, uid: userId, su: isSuperuser })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(TOKEN_EXPIRY)
@@ -43,10 +47,12 @@ export async function createToken(username: string): Promise<string> {
 
 export async function verifyToken(
   token: string
-): Promise<{ sub: string } | null> {
+): Promise<{ sub: string; uid: number; su: boolean } | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as { sub: string };
+    // Reject legacy tokens that lack uid field (force re-login after migration)
+    if (typeof payload.uid !== "number") return null;
+    return payload as unknown as { sub: string; uid: number; su: boolean };
   } catch {
     return null;
   }

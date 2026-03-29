@@ -6,6 +6,7 @@ import type { LayoutNotification } from "./layout.tsx";
 
 interface Props {
   user: string;
+  isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
   service: string;
@@ -13,8 +14,8 @@ interface Props {
   services: string[];
 }
 
-export const LogsPage: FC<Props> = ({ user, notifications, version, service, logs, services }) => (
-  <Layout title="Logs" user={user} notifications={notifications} version={version}>
+export const LogsPage: FC<Props> = ({ user, isSuperuser, notifications, version, service, logs, services }) => (
+  <Layout title="Logs" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Logs</h1>
 
     <div class="card">

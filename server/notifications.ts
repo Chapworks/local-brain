@@ -301,7 +301,7 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
         name: string;
         key_created_at: string | null;
       }>(
-        "SELECT name, key_created_at FROM brain_users WHERE is_active = TRUE AND key_created_at IS NOT NULL"
+        "SELECT name, username, key_created_at FROM users WHERE is_active = TRUE AND key_created_at IS NOT NULL"
       );
       for (const row of keyResult.rows) {
         if (row.key_created_at) {
@@ -310,7 +310,7 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
             await createNotification(pool, {
               level: "info",
               title: `MCP key for "${row.name}" is ${Math.floor(ageDays)} days old`,
-              message: `Consider rotating the key with: create-brain-user.ts ${row.name} --rotate`,
+              message: `Consider rotating the key with: create-user.ts ${row.username} --rotate`,
               source: "key-rotation",
               link: "/admin/users",
             });
@@ -318,7 +318,7 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
         }
       }
     } catch {
-      // brain_users table may not have key_created_at yet
+      // users table may not have key_created_at yet
     }
   } finally {
     client.release();

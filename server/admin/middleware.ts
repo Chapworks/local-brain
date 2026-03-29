@@ -8,6 +8,12 @@ import { verifyToken, COOKIE_NAME } from "./auth.ts";
 
 const ACCESS_MODE = Deno.env.get("ADMIN_ACCESS_MODE") || "local";
 
+export interface AuthUser {
+  id: number;
+  username: string;
+  isSuperuser: boolean;
+}
+
 /** Block tunnel-originated requests when in local-only mode. */
 export const accessModeGuard = createMiddleware(async (c, next) => {
   if (ACCESS_MODE === "local") {
@@ -36,6 +42,24 @@ export const requireAuth = createMiddleware(async (c, next) => {
     return c.redirect("/admin/login");
   }
 
+  const authUser: AuthUser = {
+    id: payload.uid,
+    username: payload.sub,
+    isSuperuser: payload.su,
+  };
+
+  c.set("authUser", authUser);
+  // Legacy compat: keep "user" as string for transition
   c.set("user", payload.sub);
+
+  return next();
+});
+
+/** Require superuser role. Must be used after requireAuth. */
+export const requireSuperuser = createMiddleware(async (c, next) => {
+  const authUser = c.get("authUser") as AuthUser | undefined;
+  if (!authUser?.isSuperuser) {
+    return c.redirect("/admin");
+  }
   return next();
 });

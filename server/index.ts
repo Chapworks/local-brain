@@ -76,6 +76,11 @@ const CHAT_MODEL = Deno.env.get("CHAT_MODEL") || "openai/gpt-4o-mini";
 const CHAT_API_FORMAT = Deno.env.get("CHAT_API_FORMAT") || "openai"; // "openai" or "anthropic"
 
 const MCP_ACCESS_KEY = Deno.env.get("MCP_ACCESS_KEY") || "";
+if (MCP_ACCESS_KEY) {
+  console.warn(
+    "WARNING: MCP_ACCESS_KEY is deprecated. Create user accounts instead. See SETUP.md."
+  );
+}
 
 const TOP_N_LINKS = 3;
 const MIN_LINK_SIMILARITY = 0.3;
@@ -99,12 +104,12 @@ const USER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 /** Result of resolving an MCP access key. (CR-02 fix: discriminated union) */
 type ResolveResult =
   | { kind: "user"; user: ResolvedUser }
-  | { kind: "global" }
+  | { kind: "deprecated" }
   | { kind: "invalid" };
 
 /**
- * Resolve an MCP access key to a brain user.
- * Falls back to the global MCP_ACCESS_KEY for backward compatibility.
+ * Resolve an MCP access key to a user.
+ * The global MCP_ACCESS_KEY is deprecated and no longer grants access.
  */
 async function resolveUser(key: string): Promise<ResolveResult> {
   // Check cache first
@@ -113,9 +118,9 @@ async function resolveUser(key: string): Promise<ResolveResult> {
     return { kind: "user", user: cached.user };
   }
 
-  // Check global key (backward compat — no user scoping)
+  // Deprecated global key — reject with clear message
   if (MCP_ACCESS_KEY && key === MCP_ACCESS_KEY) {
-    return { kind: "global" };
+    return { kind: "deprecated" };
   }
 
   // Look up by key prefix (first 8 chars) — check both primary and secondary keys
@@ -125,19 +130,30 @@ async function resolveUser(key: string): Promise<ResolveResult> {
     const result = await client.queryObject<{
       id: number;
       name: string;
+      username: string;
       mcp_key_hash: string;
       secondary_key_hash: string | null;
+      is_superuser: boolean;
+      needs_password_setup: boolean;
     }>(
-      `SELECT id, name, mcp_key_hash, secondary_key_hash FROM brain_users
+      `SELECT id, name, username, mcp_key_hash, secondary_key_hash,
+              is_superuser, password_hash = '' AS needs_password_setup
+       FROM users
        WHERE (key_prefix = $1 OR secondary_key_prefix = $1) AND is_active = TRUE`,
       [prefix]
     );
 
     for (const row of result.rows) {
+      const user: ResolvedUser = {
+        id: row.id,
+        name: row.name,
+        username: row.username,
+        isSuperuser: row.is_superuser,
+        needsPasswordSetup: row.needs_password_setup,
+      };
       // Check primary key
       const validPrimary = await bcrypt.compare(key, row.mcp_key_hash);
       if (validPrimary) {
-        const user = { id: row.id, name: row.name };
         userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
         return { kind: "user", user };
       }
@@ -145,7 +161,6 @@ async function resolveUser(key: string): Promise<ResolveResult> {
       if (row.secondary_key_hash) {
         const validSecondary = await bcrypt.compare(key, row.secondary_key_hash);
         if (validSecondary) {
-          const user = { id: row.id, name: row.name };
           userCache.set(key, { user, expiresAt: Date.now() + USER_CACHE_TTL });
           return { kind: "user", user };
         }
@@ -159,14 +174,17 @@ async function resolveUser(key: string): Promise<ResolveResult> {
 }
 
 /**
- * Authenticate an MCP request. Returns the resolved user (or null for global key).
- * Throws if the key is invalid.
+ * Authenticate an MCP request. Returns the resolved user.
+ * Throws if the key is invalid or deprecated.
  */
-async function authenticateRequest(key: string): Promise<ResolvedUser | null> {
+async function authenticateRequest(key: string): Promise<ResolvedUser> {
   const result = await resolveUser(key);
   switch (result.kind) {
     case "user": return result.user;
-    case "global": return null;
+    case "deprecated":
+      throw new Error(
+        "Global API key is deprecated. Create a user account to use Local Brain. See SETUP.md Step 6."
+      );
     case "invalid": throw new Error("Invalid access key");
   }
 }
@@ -1072,7 +1090,7 @@ server.registerTool(
            FROM thoughts`
         );
         const usersResult = await client.queryObject<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM brain_users WHERE is_active = TRUE"
+          "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE"
         );
         const linksResult = await client.queryObject<{ count: number }>(
           "SELECT COUNT(*)::int AS count FROM thought_links"
@@ -1161,7 +1179,7 @@ server.registerTool(
         }>(
           `SELECT name, key_created_at,
                   (secondary_key_hash IS NOT NULL) AS has_secondary
-           FROM brain_users WHERE is_active = TRUE`
+           FROM users WHERE is_active = TRUE`
         );
 
         const oldKeys: string[] = [];
@@ -1324,12 +1342,23 @@ app.all("*", async (c) => {
     return c.json({ error: "Missing access key. Use the x-brain-key header." }, 401);
   }
 
-  let user: ResolvedUser | null;
+  let user: ResolvedUser;
   try {
     user = await authenticateRequest(provided);
-  } catch {
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes("deprecated")) {
+      return c.json({ error: msg }, 403);
+    }
     return c.json({ error: "Invalid or missing access key" }, 401);
   }
+
+  // Fire-and-forget: update last_active_at
+  pool.connect().then((client) =>
+    client
+      .queryObject("UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1", [user.id])
+      .finally(() => client.release())
+  ).catch(() => {});
 
   // CR-01: Use AsyncLocalStorage for per-request user context (safe under concurrency)
   return requestContext.run({ user }, async () => {

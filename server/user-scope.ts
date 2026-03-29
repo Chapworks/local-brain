@@ -5,6 +5,9 @@
 export interface ResolvedUser {
   id: number;
   name: string;
+  username: string;
+  isSuperuser: boolean;
+  needsPasswordSetup: boolean;
 }
 
 /** Build a WHERE clause fragment for user scoping. */

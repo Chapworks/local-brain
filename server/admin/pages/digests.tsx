@@ -16,6 +16,7 @@ interface DigestConfig {
 
 interface Props {
   user: string;
+  isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
   configs: DigestConfig[];
@@ -25,13 +26,14 @@ interface Props {
 
 export const DigestsPage: FC<Props> = ({
   user,
+  isSuperuser,
   notifications,
   version,
   configs,
   brainUsers,
   flash,
 }) => (
-  <Layout title="Digests" user={user} notifications={notifications} version={version}>
+  <Layout title="Digests" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Scheduled Digests</h1>
 
     {flash && (

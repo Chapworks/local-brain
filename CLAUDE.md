@@ -66,8 +66,8 @@ cd server && deno test
 # Docker (home hosting)
 docker compose up -d
 
-# Create admin user
-docker compose exec mcp-server deno run -A scripts/create-user.ts
+# Create user (first user is auto-superuser)
+docker compose exec mcp-server deno run -A scripts/create-user.ts <username> <password>
 
 # Run migrations
 docker compose exec mcp-server deno run -A scripts/migrate.ts

@@ -31,10 +31,10 @@ export async function getDueDigests(pool: Pool): Promise<DigestConfig[]> {
   const client = await pool.connect();
   try {
     const result = await client.queryObject<DigestConfig>(`
-      SELECT dc.id, dc.user_id, bu.name AS user_name, dc.frequency,
+      SELECT dc.id, dc.user_id, u.name AS user_name, dc.frequency,
              dc.webhook_url, dc.last_sent_at
       FROM digest_configs dc
-      JOIN brain_users bu ON bu.id = dc.user_id
+      JOIN users u ON u.id = dc.user_id
       WHERE dc.is_active = TRUE
         AND dc.webhook_url IS NOT NULL
         AND (

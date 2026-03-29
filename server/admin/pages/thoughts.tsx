@@ -16,6 +16,7 @@ interface Thought {
 
 interface Props {
   user: string;
+  isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
   thoughts: Thought[];
@@ -34,6 +35,7 @@ interface Props {
 
 export const ThoughtsPage: FC<Props> = ({
   user,
+  isSuperuser,
   notifications,
   version,
   thoughts,
@@ -65,7 +67,7 @@ export const ThoughtsPage: FC<Props> = ({
   };
 
   return (
-    <Layout title="Thoughts" user={user} notifications={notifications} version={version}>
+    <Layout title="Thoughts" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
       <h1 style="font-size:1.5rem; margin-bottom:1rem">Thoughts</h1>
 
       <div class="card">

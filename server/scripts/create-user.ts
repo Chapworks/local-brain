@@ -1,30 +1,26 @@
 /**
- * CLI script to create or update admin users.
+ * Unified user management CLI.
  *
- * Usage (from project root):
+ * Usage:
+ *   create-user.ts <username> <password>              — create user with password + MCP key
+ *   create-user.ts <username> <password> --superuser   — create as superuser
+ *   create-user.ts <username> --rotate                 — generate secondary MCP key
+ *   create-user.ts <username> --promote                — promote secondary to primary
+ *   create-user.ts <username> --revoke-secondary       — remove secondary key
+ *   create-user.ts <username> --reset-password <pass>  — reset password
+ *
+ * Run inside the mcp-server container:
  *   docker compose exec mcp-server deno run \
- *     --allow-net --allow-env \
+ *     --allow-net --allow-env --allow-read \
  *     /app/scripts/create-user.ts <username> <password>
  *
- * If the username already exists, the password is updated.
+ * The first user created is automatically a superuser.
+ * The MCP key is shown ONCE — it cannot be retrieved later.
  */
 
 import { Pool } from "postgres";
+import bcrypt from "bcrypt";
 import { hashPassword } from "../admin/auth.ts";
-
-const username = Deno.args[0];
-const password = Deno.args[1];
-
-if (!username || !password) {
-  console.error("Usage: create-user.ts <username> <password>");
-  console.error("  Creates a new admin user or updates an existing one.");
-  Deno.exit(1);
-}
-
-if (password.length < 8) {
-  console.error("Error: Password must be at least 8 characters.");
-  Deno.exit(1);
-}
 
 const pool = new Pool(
   {
@@ -37,22 +33,187 @@ const pool = new Pool(
   1
 );
 
-const client = await pool.connect();
-try {
-  const hash = await hashPassword(password);
+const username = Deno.args[0];
+const arg2 = Deno.args[1];
+const arg3 = Deno.args[2];
 
-  await client.queryObject(
-    `INSERT INTO admin_users (username, password_hash)
-     VALUES ($1, $2)
-     ON CONFLICT (username)
-     DO UPDATE SET password_hash = $2, updated_at = NOW()`,
-    [username, hash]
+if (!username || username.startsWith("--")) {
+  console.error("Usage:");
+  console.error("  create-user.ts <username> <password>              — create user");
+  console.error("  create-user.ts <username> <password> --superuser  — create as superuser");
+  console.error("  create-user.ts <username> --rotate                — generate secondary MCP key");
+  console.error("  create-user.ts <username> --promote               — promote secondary to primary");
+  console.error("  create-user.ts <username> --revoke-secondary      — remove secondary key");
+  console.error("  create-user.ts <username> --reset-password <pass> — reset password");
+  Deno.exit(1);
+}
+
+/** Generate a random 64-char hex key. */
+function generateKey(): { fullKey: string; prefix: string } {
+  const rawBytes = new Uint8Array(32);
+  crypto.getRandomValues(rawBytes);
+  const fullKey = Array.from(rawBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return { fullKey, prefix: fullKey.slice(0, 8) };
+}
+
+const client = await pool.connect();
+
+try {
+  // Check for existing user
+  const existing = await client.queryObject<{
+    id: number;
+    secondary_key_hash: string | null;
+  }>(
+    "SELECT id, secondary_key_hash FROM users WHERE username = $1",
+    [username]
   );
 
-  console.log(`Admin user "${username}" created/updated.`);
-} catch (err) {
-  console.error("Error:", (err as Error).message);
-  Deno.exit(1);
+  if (arg2 === "--rotate") {
+    // --- Key rotation: generate secondary key ---
+    if (!existing.rows.length) {
+      console.error(`User "${username}" does not exist. Create them first.`);
+      Deno.exit(1);
+    }
+    if (existing.rows[0].secondary_key_hash) {
+      console.error(`User "${username}" already has a secondary key. --promote or --revoke-secondary first.`);
+      Deno.exit(1);
+    }
+
+    const { fullKey, prefix } = generateKey();
+    const keyHash = await bcrypt.hash(fullKey, 12);
+
+    await client.queryObject(
+      `UPDATE users
+       SET secondary_key_hash = $1, secondary_key_prefix = $2,
+           secondary_key_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE username = $3`,
+      [keyHash, prefix, username]
+    );
+
+    console.log(`\n  Generated secondary key for: ${username}`);
+    console.log(`  Both the old and new keys now work.`);
+    console.log(`\n  Secondary MCP Key: ${fullKey}`);
+    console.log(`  Key Prefix:        ${prefix}`);
+    console.log(`\n  Next steps:`);
+    console.log(`    1. Update your MCP clients with the new key`);
+    console.log(`    2. Run: create-user.ts ${username} --promote`);
+    console.log(`    3. The old key will stop working after promotion.\n`);
+
+  } else if (arg2 === "--promote") {
+    // --- Promote secondary to primary ---
+    if (!existing.rows.length) {
+      console.error(`User "${username}" does not exist.`);
+      Deno.exit(1);
+    }
+    if (!existing.rows[0].secondary_key_hash) {
+      console.error(`User "${username}" has no secondary key to promote. Run --rotate first.`);
+      Deno.exit(1);
+    }
+
+    await client.queryObject(
+      `UPDATE users
+       SET mcp_key_hash = secondary_key_hash,
+           key_prefix = secondary_key_prefix,
+           key_created_at = secondary_key_created_at,
+           secondary_key_hash = NULL,
+           secondary_key_prefix = NULL,
+           secondary_key_created_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE username = $1`,
+      [username]
+    );
+
+    console.log(`\n  Promoted secondary key for: ${username}`);
+    console.log(`  The old primary key no longer works.`);
+    console.log(`  The secondary key is now the only active key.\n`);
+
+  } else if (arg2 === "--revoke-secondary") {
+    // --- Revoke secondary key ---
+    if (!existing.rows.length) {
+      console.error(`User "${username}" does not exist.`);
+      Deno.exit(1);
+    }
+
+    await client.queryObject(
+      `UPDATE users
+       SET secondary_key_hash = NULL, secondary_key_prefix = NULL,
+           secondary_key_created_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE username = $1`,
+      [username]
+    );
+
+    console.log(`\n  Revoked secondary key for: ${username}`);
+    console.log(`  Only the primary key remains active.\n`);
+
+  } else if (arg2 === "--reset-password") {
+    // --- Reset password ---
+    const newPassword = arg3;
+    if (!newPassword || newPassword.length < 8) {
+      console.error("Usage: create-user.ts <username> --reset-password <new-password>");
+      console.error("  Password must be at least 8 characters.");
+      Deno.exit(1);
+    }
+    if (!existing.rows.length) {
+      console.error(`User "${username}" does not exist.`);
+      Deno.exit(1);
+    }
+
+    const passHash = await hashPassword(newPassword);
+    await client.queryObject(
+      "UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE username = $2",
+      [passHash, username]
+    );
+
+    console.log(`\n  Password reset for: ${username}\n`);
+
+  } else {
+    // --- Create new user ---
+    const password = arg2;
+    const makeSuperuser = arg3 === "--superuser";
+
+    if (!password || password.startsWith("--")) {
+      console.error("Usage: create-user.ts <username> <password>");
+      Deno.exit(1);
+    }
+    if (password.length < 8) {
+      console.error("Error: Password must be at least 8 characters.");
+      Deno.exit(1);
+    }
+    if (existing.rows.length) {
+      console.error(`User "${username}" already exists. Use --reset-password to change password or --rotate for key rotation.`);
+      Deno.exit(1);
+    }
+
+    // Auto-superuser if no users exist
+    const countResult = await client.queryObject<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM users"
+    );
+    const isFirst = (countResult.rows[0]?.count || 0) === 0;
+    const isSuperuser = isFirst || makeSuperuser;
+
+    const passHash = await hashPassword(password);
+    const { fullKey, prefix } = generateKey();
+    const keyHash = await bcrypt.hash(fullKey, 12);
+
+    await client.queryObject(
+      `INSERT INTO users (name, username, password_hash, mcp_key_hash, key_prefix, is_superuser, key_created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
+      [username, username, passHash, keyHash, prefix, isSuperuser]
+    );
+
+    console.log(`\n  Created user: ${username}`);
+    if (isSuperuser) {
+      console.log(`  Role: superuser${isFirst ? " (first user — automatic)" : ""}`);
+    }
+    console.log(`\n  MCP Access Key: ${fullKey}`);
+    console.log(`  Key Prefix:     ${prefix}`);
+    console.log(`\n  Save this key now — it cannot be retrieved later.`);
+    console.log(`  Use this key in the x-brain-key header when connecting MCP clients.`);
+    console.log(`\n  Admin panel: log in at /admin with username "${username}" and your password.`);
+    console.log(`  For zero-downtime key rotation later, use: create-user.ts ${username} --rotate\n`);
+  }
 } finally {
   client.release();
   await pool.end();

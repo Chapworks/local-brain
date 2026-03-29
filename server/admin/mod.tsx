@@ -17,9 +17,11 @@ import { Hono } from "hono";
 import { setCookie, deleteCookie } from "hono/cookie";
 import type { Pool } from "postgres";
 
-import { accessModeGuard, requireAuth } from "./middleware.ts";
+import { accessModeGuard, requireAuth, requireSuperuser } from "./middleware.ts";
+import type { AuthUser } from "./middleware.ts";
 import {
   verifyPassword,
+  hashPassword,
   createToken,
   COOKIE_NAME,
 } from "./auth.ts";
@@ -38,6 +40,7 @@ import { ImportExportPage } from "./pages/import-export.tsx";
 import { DigestsPage } from "./pages/digests.tsx";
 import { UsagePage } from "./pages/usage.tsx";
 import { BackupsPage } from "./pages/backups.tsx";
+import { AccountPage } from "./pages/account.tsx";
 import { getUsageSummary } from "../usage.ts";
 import {
   getActiveNotifications,
@@ -248,26 +251,30 @@ async function restartService(service: string): Promise<boolean> {
   }
 }
 
-/** Get brain users list with thought counts. */
-async function getBrainUsers(pool: Pool): Promise<
-  { id: number; name: string; key_prefix: string; is_active: boolean; thought_count: number; created_at: string }[]
+/** Get users list with thought counts. */
+async function getUsers(pool: Pool): Promise<
+  { id: number; name: string; username: string; key_prefix: string; is_active: boolean; is_superuser: boolean; last_active_at: string | null; thought_count: number; created_at: string }[]
 > {
   const client = await pool.connect();
   try {
     const result = await client.queryObject<{
       id: number;
       name: string;
+      username: string;
       key_prefix: string;
       is_active: boolean;
+      is_superuser: boolean;
+      last_active_at: string | null;
       thought_count: number;
       created_at: string;
     }>(
-      `SELECT bu.id, bu.name, bu.key_prefix, bu.is_active, bu.created_at,
+      `SELECT u.id, u.name, u.username, u.key_prefix, u.is_active, u.is_superuser,
+              u.last_active_at, u.created_at,
               COALESCE(COUNT(t.id), 0)::int AS thought_count
-       FROM brain_users bu
-       LEFT JOIN thoughts t ON t.user_id = bu.id
-       GROUP BY bu.id
-       ORDER BY bu.created_at DESC`
+       FROM users u
+       LEFT JOIN thoughts t ON t.user_id = u.id
+       GROUP BY u.id
+       ORDER BY u.created_at DESC`
     );
     return result.rows;
   } finally {
@@ -373,11 +380,17 @@ export function createAdminApp(pool: Pool): Hono {
     }
 
     const client = await pool.connect();
+    let userId: number;
+    let isSuperuser: boolean;
+    let needsPasswordSetup: boolean;
     try {
       const result = await client.queryObject<{
+        id: number;
         password_hash: string;
+        is_superuser: boolean;
+        is_active: boolean;
       }>(
-        "SELECT password_hash FROM admin_users WHERE username = $1",
+        "SELECT id, password_hash, is_superuser, is_active FROM users WHERE username = $1",
         [username]
       );
 
@@ -387,17 +400,40 @@ export function createAdminApp(pool: Pool): Hono {
         );
       }
 
-      const valid = await verifyPassword(password, result.rows[0].password_hash);
+      const row = result.rows[0];
+      if (!row.is_active) {
+        return c.html(
+          (<LoginPage error="Account is disabled." />) as unknown as string
+        );
+      }
+
+      needsPasswordSetup = !row.password_hash;
+      if (needsPasswordSetup) {
+        return c.html(
+          (<LoginPage error="Password not set. Use the CLI to set a password: create-user.ts <username> --reset-password" />) as unknown as string
+        );
+      }
+
+      const valid = await verifyPassword(password, row.password_hash);
       if (!valid) {
         return c.html(
           (<LoginPage error="Invalid username or password." />) as unknown as string
         );
       }
+
+      userId = row.id;
+      isSuperuser = row.is_superuser;
+
+      // Update last_active_at on login
+      await client.queryObject(
+        "UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [userId]
+      );
     } finally {
       client.release();
     }
 
-    const token = await createToken(username);
+    const token = await createToken(userId, username, isSuperuser);
     setCookie(c, COOKIE_NAME, token, {
       httpOnly: true,
       secure: ACCESS_MODE === "remote", // CR-19: allow HTTP on localhost
@@ -436,9 +472,14 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const client = await pool.connect();
 
     try {
+      // Scope: superusers see aggregate stats, regular users see own stats
+      const userFilter = authUser.isSuperuser ? "" : "AND user_id = $1";
+      const userParams = authUser.isSuperuser ? [] : [authUser.id];
+
       // CR-20: Use SQL aggregation instead of loading all rows into memory
       const countResult = await client.queryObject<{ count: number; archived: number; min_date: string | null; max_date: string | null }>(
         `SELECT
@@ -446,7 +487,8 @@ export function createAdminApp(pool: Pool): Hono {
           COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived,
           MIN(created_at) FILTER (WHERE archived = FALSE)::text AS min_date,
           MAX(created_at) FILTER (WHERE archived = FALSE)::text AS max_date
-         FROM thoughts`
+         FROM thoughts WHERE TRUE ${userFilter}`,
+        userParams
       );
 
       const total = countResult.rows[0]?.count || 0;
@@ -460,8 +502,9 @@ export function createAdminApp(pool: Pool): Hono {
       // Types via SQL aggregation
       const typesResult = await client.queryObject<{ type: string; count: number }>(
         `SELECT metadata->>'type' AS type, COUNT(*)::int AS count
-         FROM thoughts WHERE archived = FALSE AND metadata->>'type' IS NOT NULL
-         GROUP BY metadata->>'type' ORDER BY count DESC`
+         FROM thoughts WHERE archived = FALSE AND metadata->>'type' IS NOT NULL ${userFilter}
+         GROUP BY metadata->>'type' ORDER BY count DESC`,
+        userParams
       );
       const types: Record<string, number> = {};
       for (const r of typesResult.rows) types[r.type] = r.count;
@@ -470,34 +513,42 @@ export function createAdminApp(pool: Pool): Hono {
       const topTopicsResult = await client.queryObject<{ topic: string; count: number }>(
         `SELECT t.topic, COUNT(*)::int AS count
          FROM thoughts, jsonb_array_elements_text(metadata->'topics') AS t(topic)
-         WHERE archived = FALSE
-         GROUP BY t.topic ORDER BY count DESC LIMIT 10`
+         WHERE archived = FALSE ${userFilter}
+         GROUP BY t.topic ORDER BY count DESC LIMIT 10`,
+        userParams
       );
       const topTopics = topTopicsResult.rows.map((r) => [r.topic, r.count] as [string, number]);
 
-      // Service health from Docker
-      const containers = await getContainers();
-      const services = COMPOSE_SERVICES.map((name) => {
-        const c = containers.find((ct) => ct.name === name);
-        return {
-          name,
-          status: c?.state || "unknown",
-          uptime: c?.status || "—",
-        };
-      });
+      // Service health from Docker (superuser only)
+      let services: { name: string; status: string; uptime: string }[] = [];
+      if (authUser.isSuperuser) {
+        const containers = await getContainers();
+        services = COMPOSE_SERVICES.map((name) => {
+          const ct = containers.find((c) => c.name === name);
+          return {
+            name,
+            status: ct?.state || "unknown",
+            uptime: ct?.status || "—",
+          };
+        });
+      }
 
       // User count and connection count
-      const usersResult = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM brain_users WHERE is_active = TRUE"
+      const activeUsersResult = await client.queryObject<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE"
       );
       const linksResult = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM thought_links"
+        `SELECT COUNT(*)::int AS count FROM thought_links tl
+         JOIN thoughts ts ON ts.id = tl.source_id
+         WHERE TRUE ${userFilter ? "AND ts.user_id = $1" : ""}`,
+        userParams
       );
 
       return c.html(
         (
           <DashboardPage
             user={user}
+            isSuperuser={authUser.isSuperuser}
             notifications={notifs(c)} version={APP_VERSION}
             stats={{
               totalThoughts: total,
@@ -506,7 +557,7 @@ export function createAdminApp(pool: Pool): Hono {
               topTopics,
               dateRange,
               services,
-              brainUsers: usersResult.rows[0]?.count || 0,
+              brainUsers: activeUsersResult.rows[0]?.count || 0,
               connections: linksResult.rows[0]?.count || 0,
             }}
           />
@@ -521,20 +572,20 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/thoughts", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
     const pageSize = 25;
     const filterType = c.req.query("type") || "";
     const filterTopic = c.req.query("topic") || "";
-    const filterUser = c.req.query("user_id") || "";
     const showArchived = c.req.query("archived") === "1";
     const search = c.req.query("q") || "";
 
     const client = await pool.connect();
     try {
-      // Build dynamic query
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-      let paramIdx = 1;
+      // Always scope to current user — even superusers only see their own thoughts
+      const conditions: string[] = [`t.user_id = $1`];
+      const params: unknown[] = [authUser.id];
+      let paramIdx = 2;
 
       if (!showArchived) {
         conditions.push("t.archived = FALSE");
@@ -550,22 +601,13 @@ export function createAdminApp(pool: Pool): Hono {
         params.push(filterTopic);
         paramIdx++;
       }
-      if (filterUser === "null") {
-        conditions.push("t.user_id IS NULL");
-      } else if (filterUser) {
-        conditions.push(`t.user_id = $${paramIdx}`);
-        params.push(parseInt(filterUser, 10));
-        paramIdx++;
-      }
       if (search) {
         conditions.push(`t.content ILIKE $${paramIdx}`);
         params.push(`%${search}%`);
         paramIdx++;
       }
 
-      const where = conditions.length
-        ? `WHERE ${conditions.join(" AND ")}`
-        : "";
+      const where = `WHERE ${conditions.join(" AND ")}`;
 
       // Count
       const countResult = await client.queryObject<{ count: number }>(
@@ -583,44 +625,41 @@ export function createAdminApp(pool: Pool): Hono {
         created_at: string;
         archived: boolean;
         expires_at: string | null;
-        user_name: string | null;
       }>(
-        `SELECT t.id, t.content, t.metadata, t.created_at, t.archived, t.expires_at,
-                bu.name AS user_name
+        `SELECT t.id, t.content, t.metadata, t.created_at, t.archived, t.expires_at
          FROM thoughts t
-         LEFT JOIN brain_users bu ON bu.id = t.user_id
          ${where} ORDER BY t.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
         [...params, pageSize, offset]
       );
 
-      // Get all types, topics, and users for filter dropdowns
+      // Get types and topics for filter dropdowns (scoped to current user)
       const typesResult = await client.queryObject<{ type: string }>(
-        "SELECT DISTINCT metadata->>'type' AS type FROM thoughts WHERE metadata->>'type' IS NOT NULL ORDER BY type"
+        "SELECT DISTINCT metadata->>'type' AS type FROM thoughts WHERE metadata->>'type' IS NOT NULL AND user_id = $1 ORDER BY type",
+        [authUser.id]
       );
       const topicsResult = await client.queryObject<{ topic: string }>(
-        "SELECT DISTINCT jsonb_array_elements_text(metadata->'topics') AS topic FROM thoughts ORDER BY topic"
-      );
-      const usersResult = await client.queryObject<{ id: number; name: string }>(
-        "SELECT id, name FROM brain_users ORDER BY name"
+        "SELECT DISTINCT jsonb_array_elements_text(metadata->'topics') AS topic FROM thoughts WHERE user_id = $1 ORDER BY topic",
+        [authUser.id]
       );
 
       return c.html(
         (
           <ThoughtsPage
             user={user}
+            isSuperuser={authUser.isSuperuser}
             notifications={notifs(c)} version={APP_VERSION}
-            thoughts={thoughtsResult.rows}
+            thoughts={thoughtsResult.rows.map((t) => ({ ...t, user_name: null }))}
             total={total}
             page={page}
             pageSize={pageSize}
             filterType={filterType}
             filterTopic={filterTopic}
-            filterUser={filterUser}
+            filterUser={String(authUser.id)}
             showArchived={showArchived}
             search={search}
             allTypes={typesResult.rows.map((r) => r.type)}
             allTopics={topicsResult.rows.map((r) => r.topic)}
-            allUsers={usersResult.rows}
+            allUsers={[]}
           />
         ) as unknown as string
       );
@@ -632,15 +671,17 @@ export function createAdminApp(pool: Pool): Hono {
   // --- Thought actions (archive, set TTL) ---
 
   admin.post("/thoughts/archive", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const thoughtId = parseInt(String(body.thought_id), 10);
     const unarchive = body.unarchive === "1";
 
     const client = await pool.connect();
     try {
+      // Ownership check: only modify own thoughts
       await client.queryObject(
-        `UPDATE thoughts SET archived = $1, archived_at = ${unarchive ? "NULL" : "CURRENT_TIMESTAMP"} WHERE id = $2`,
-        [!unarchive, thoughtId]
+        `UPDATE thoughts SET archived = $1, archived_at = ${unarchive ? "NULL" : "CURRENT_TIMESTAMP"} WHERE id = $2 AND user_id = $3`,
+        [!unarchive, thoughtId, authUser.id]
       );
     } finally {
       client.release();
@@ -650,21 +691,23 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/thoughts/set-ttl", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const thoughtId = parseInt(String(body.thought_id), 10);
     const days = parseInt(String(body.days || "0"), 10);
 
     const client = await pool.connect();
     try {
+      // Ownership check: only modify own thoughts
       if (days > 0 && days <= 3650) {
         await client.queryObject(
-          `UPDATE thoughts SET expires_at = CURRENT_TIMESTAMP + make_interval(days => $2) WHERE id = $1`,
-          [thoughtId, days]
+          `UPDATE thoughts SET expires_at = CURRENT_TIMESTAMP + make_interval(days => $2) WHERE id = $1 AND user_id = $3`,
+          [thoughtId, days, authUser.id]
         );
       } else {
         await client.queryObject(
-          "UPDATE thoughts SET expires_at = NULL WHERE id = $1",
-          [thoughtId]
+          "UPDATE thoughts SET expires_at = NULL WHERE id = $1 AND user_id = $2",
+          [thoughtId, authUser.id]
         );
       }
     } finally {
@@ -674,27 +717,94 @@ export function createAdminApp(pool: Pool): Hono {
     return c.redirect("/admin/thoughts");
   });
 
-  // --- Brain Users ---
+  // --- Users (superuser only) ---
 
-  admin.get("/users", async (c) => {
+  admin.get("/users", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
-    const brainUsers = await getBrainUsers(pool);
+    const authUser = c.get("authUser") as AuthUser;
+    const allUsers = await getUsers(pool);
 
     return c.html(
-      (<UsersPage user={user} notifications={notifs(c)} version={APP_VERSION} brainUsers={brainUsers} />) as unknown as string
+      (<UsersPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} users={allUsers} currentUserId={authUser.id} />) as unknown as string
     );
   });
 
-  admin.post("/users/toggle", async (c) => {
+  admin.post("/users/toggle", requireSuperuser, async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const userId = parseInt(String(body.user_id), 10);
     const isActive = body.is_active === "true";
 
+    // Prevent deactivating last active superuser
+    if (!isActive) {
+      const client = await pool.connect();
+      try {
+        const target = await client.queryObject<{ is_superuser: boolean }>(
+          "SELECT is_superuser FROM users WHERE id = $1", [userId]
+        );
+        if (target.rows[0]?.is_superuser) {
+          const suCount = await client.queryObject<{ count: number }>(
+            "SELECT COUNT(*)::int AS count FROM users WHERE is_superuser = TRUE AND is_active = TRUE AND id != $1",
+            [userId]
+          );
+          if ((suCount.rows[0]?.count || 0) < 1) {
+            return c.redirect("/admin/users");
+          }
+        }
+        await client.queryObject(
+          "UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+          [isActive, userId]
+        );
+      } finally {
+        client.release();
+      }
+    } else {
+      const client = await pool.connect();
+      try {
+        await client.queryObject(
+          "UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+          [isActive, userId]
+        );
+      } finally {
+        client.release();
+      }
+    }
+
+    return c.redirect("/admin/users");
+  });
+
+  admin.post("/users/toggle-superuser", requireSuperuser, async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const userId = parseInt(String(body.user_id), 10);
+    const makeSuperuser = body.is_superuser === "true";
+
+    // Cannot remove own superuser flag
+    if (!makeSuperuser && userId === authUser.id) {
+      return c.redirect("/admin/users");
+    }
+
+    // Cannot remove if would leave zero superusers
+    if (!makeSuperuser) {
+      const client = await pool.connect();
+      try {
+        const suCount = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM users WHERE is_superuser = TRUE AND is_active = TRUE AND id != $1",
+          [userId]
+        );
+        if ((suCount.rows[0]?.count || 0) < 1) {
+          return c.redirect("/admin/users");
+        }
+      } finally {
+        client.release();
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.queryObject(
-        "UPDATE brain_users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-        [isActive, userId]
+        "UPDATE users SET is_superuser = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [makeSuperuser, userId]
       );
     } finally {
       client.release();
@@ -707,10 +817,11 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/graph", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const client = await pool.connect();
 
     try {
-      // Get thoughts with link counts
+      // Scope to current user's thoughts only
       const nodesResult = await client.queryObject<{
         id: number;
         content: string;
@@ -718,12 +829,15 @@ export function createAdminApp(pool: Pool): Hono {
         link_count: number;
       }>(
         `SELECT t.id, t.content, t.metadata->>'type' AS type,
-                (SELECT COUNT(*)::int FROM thought_links tl WHERE tl.source_id = t.id OR tl.target_id = t.id) AS link_count
+                (SELECT COUNT(*)::int FROM thought_links tl
+                 JOIN thoughts t2 ON (t2.id = CASE WHEN tl.source_id = t.id THEN tl.target_id ELSE tl.source_id END)
+                 WHERE (tl.source_id = t.id OR tl.target_id = t.id) AND t2.user_id = $1) AS link_count
          FROM thoughts t
-         WHERE t.archived = FALSE
+         WHERE t.archived = FALSE AND t.user_id = $1
            AND EXISTS (SELECT 1 FROM thought_links tl WHERE tl.source_id = t.id OR tl.target_id = t.id)
          ORDER BY link_count DESC
-         LIMIT 200`
+         LIMIT 200`,
+        [authUser.id]
       );
 
       const nodeIds = new Set(nodesResult.rows.map((n) => n.id));
@@ -733,10 +847,14 @@ export function createAdminApp(pool: Pool): Hono {
         target: number;
         similarity: number;
       }>(
-        `SELECT source_id AS source, target_id AS target, similarity
-         FROM thought_links
-         ORDER BY similarity DESC
-         LIMIT 500`
+        `SELECT tl.source_id AS source, tl.target_id AS target, tl.similarity
+         FROM thought_links tl
+         JOIN thoughts ts ON ts.id = tl.source_id
+         JOIN thoughts tt ON tt.id = tl.target_id
+         WHERE ts.user_id = $1 AND tt.user_id = $1
+         ORDER BY tl.similarity DESC
+         LIMIT 500`,
+        [authUser.id]
       );
 
       // Only include links where both nodes are in the node set
@@ -750,7 +868,7 @@ export function createAdminApp(pool: Pool): Hono {
       });
 
       return c.html(
-        (<GraphPage user={user} notifications={notifs(c)} version={APP_VERSION} graphData={graphData} />) as unknown as string
+        (<GraphPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} graphData={graphData} />) as unknown as string
       );
     } finally {
       client.release();
@@ -761,23 +879,23 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/import-export", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const client = await pool.connect();
 
     try {
       const countResult = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM thoughts"
-      );
-      const usersResult = await client.queryObject<{ id: number; name: string }>(
-        "SELECT id, name FROM brain_users ORDER BY name"
+        "SELECT COUNT(*)::int AS count FROM thoughts WHERE user_id = $1",
+        [authUser.id]
       );
 
       return c.html(
         (
           <ImportExportPage
             user={user}
+            isSuperuser={authUser.isSuperuser}
             notifications={notifs(c)} version={APP_VERSION}
             thoughtCount={countResult.rows[0]?.count || 0}
-            brainUsers={usersResult.rows}
+            brainUsers={[]}
           />
         ) as unknown as string
       );
@@ -787,26 +905,20 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/export", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const format = String(body.format || "json");
-    const userId = body.user_id ? String(body.user_id) : "";
     const includeArchived = body.include_archived === "1";
 
     const client = await pool.connect();
     try {
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-      let paramIdx = 1;
+      // Always scope to current user
+      const conditions: string[] = ["user_id = $1"];
+      const params: unknown[] = [authUser.id];
+      let paramIdx = 2;
 
       if (!includeArchived) {
         conditions.push("archived = FALSE");
-      }
-      if (userId === "null") {
-        conditions.push("user_id IS NULL");
-      } else if (userId) {
-        conditions.push(`user_id = $${paramIdx}`);
-        params.push(parseInt(userId, 10));
-        paramIdx++;
       }
 
       const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -870,9 +982,11 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.post("/import", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const file = body.file;
-    const userId = body.user_id ? parseInt(String(body.user_id), 10) : null;
+    // Always import to current user
+    const userId = authUser.id;
 
     if (!file || typeof file === "string") {
       const client = await pool.connect();
@@ -881,12 +995,13 @@ export function createAdminApp(pool: Pool): Hono {
           "SELECT COUNT(*)::int AS count FROM thoughts"
         );
         const usersResult = await client.queryObject<{ id: number; name: string }>(
-          "SELECT id, name FROM brain_users ORDER BY name"
+          "SELECT id, name FROM users ORDER BY name"
         );
         return c.html(
           (
             <ImportExportPage
               user={user}
+              isSuperuser={authUser.isSuperuser}
               notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
@@ -909,12 +1024,13 @@ export function createAdminApp(pool: Pool): Hono {
           "SELECT COUNT(*)::int AS count FROM thoughts"
         );
         const usersResult = await client.queryObject<{ id: number; name: string }>(
-          "SELECT id, name FROM brain_users ORDER BY name"
+          "SELECT id, name FROM users ORDER BY name"
         );
         return c.html(
           (
             <ImportExportPage
               user={user}
+              isSuperuser={authUser.isSuperuser}
               notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
@@ -940,12 +1056,13 @@ export function createAdminApp(pool: Pool): Hono {
           "SELECT COUNT(*)::int AS count FROM thoughts"
         );
         const usersResult = await client.queryObject<{ id: number; name: string }>(
-          "SELECT id, name FROM brain_users ORDER BY name"
+          "SELECT id, name FROM users ORDER BY name"
         );
         return c.html(
           (
             <ImportExportPage
               user={user}
+              isSuperuser={authUser.isSuperuser}
               notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
@@ -966,12 +1083,13 @@ export function createAdminApp(pool: Pool): Hono {
           "SELECT COUNT(*)::int AS count FROM thoughts"
         );
         const usersResult = await client.queryObject<{ id: number; name: string }>(
-          "SELECT id, name FROM brain_users ORDER BY name"
+          "SELECT id, name FROM users ORDER BY name"
         );
         return c.html(
           (
             <ImportExportPage
               user={user}
+              isSuperuser={authUser.isSuperuser}
               notifications={notifs(c)} version={APP_VERSION}
               thoughtCount={countResult.rows[0]?.count || 0}
               brainUsers={usersResult.rows}
@@ -1045,7 +1163,7 @@ export function createAdminApp(pool: Pool): Hono {
         "SELECT COUNT(*)::int AS count FROM thoughts"
       );
       const usersResult = await client.queryObject<{ id: number; name: string }>(
-        "SELECT id, name FROM brain_users ORDER BY name"
+        "SELECT id, name FROM users ORDER BY name"
       );
 
       return c.html(
@@ -1071,6 +1189,7 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/digests", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const client = await pool.connect();
 
     try {
@@ -1083,24 +1202,27 @@ export function createAdminApp(pool: Pool): Hono {
         is_active: boolean;
         last_sent_at: string | null;
       }>(
-        `SELECT dc.id, bu.name AS user_name, dc.frequency, dc.delivery,
+        `SELECT dc.id, u.name AS user_name, dc.frequency, dc.delivery,
                 dc.webhook_url, dc.is_active, dc.last_sent_at
          FROM digest_configs dc
-         JOIN brain_users bu ON bu.id = dc.user_id
-         ORDER BY dc.created_at DESC`
+         JOIN users u ON u.id = dc.user_id
+         WHERE dc.user_id = $1
+         ORDER BY dc.created_at DESC`,
+        [authUser.id]
       );
 
       const usersResult = await client.queryObject<{ id: number; name: string }>(
-        "SELECT id, name FROM brain_users ORDER BY name"
+        "SELECT id, name FROM users ORDER BY name"
       );
 
       return c.html(
         (
           <DigestsPage
             user={user}
+            isSuperuser={authUser.isSuperuser}
             notifications={notifs(c)} version={APP_VERSION}
             configs={configsResult.rows}
-            brainUsers={usersResult.rows}
+            brainUsers={[]}
           />
         ) as unknown as string
       );
@@ -1110,8 +1232,9 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/digests", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
-    const userId = parseInt(String(body.user_id), 10);
+    const userId = authUser.id;
     const frequency = String(body.frequency || "daily");
     const webhookUrl = String(body.webhook_url || "").trim();
 
@@ -1169,38 +1292,49 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/usage", async (c) => {
     const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
     const filterDays = parseInt(c.req.query("days") || "30", 10);
     const filterUser = c.req.query("user_id") || "";
 
     const usageOpts: { userId?: number | null; days?: number } = {};
     if (filterDays > 0) usageOpts.days = filterDays;
-    if (filterUser === "null") {
-      usageOpts.userId = null;
-    } else if (filterUser) {
-      usageOpts.userId = parseInt(filterUser, 10);
+
+    if (authUser.isSuperuser) {
+      // Superusers can filter by any user
+      if (filterUser === "null") {
+        usageOpts.userId = null;
+      } else if (filterUser) {
+        usageOpts.userId = parseInt(filterUser, 10);
+      }
+    } else {
+      // Regular users only see their own usage
+      usageOpts.userId = authUser.id;
     }
 
     const summary = await getUsageSummary(pool, usageOpts);
-    const client = await pool.connect();
-    let brainUsers: { id: number; name: string }[] = [];
-    try {
-      const usersResult = await client.queryObject<{ id: number; name: string }>(
-        "SELECT id, name FROM brain_users ORDER BY name"
-      );
-      brainUsers = usersResult.rows;
-    } finally {
-      client.release();
+    let allUsers: { id: number; name: string }[] = [];
+    if (authUser.isSuperuser) {
+      const client = await pool.connect();
+      try {
+        const usersResult = await client.queryObject<{ id: number; name: string }>(
+          "SELECT id, name FROM users ORDER BY name"
+        );
+        allUsers = usersResult.rows;
+      } finally {
+        client.release();
+      }
     }
 
     return c.html(
       (
         <UsagePage
           user={user}
+          isSuperuser={authUser.isSuperuser}
           notifications={notifs(c)} version={APP_VERSION}
           summary={summary}
           filterDays={filterDays}
-          brainUsers={brainUsers}
-          filterUser={filterUser}
+          brainUsers={allUsers}
+          filterUser={authUser.isSuperuser ? filterUser : String(authUser.id)}
         />
       ) as unknown as string
     );
@@ -1208,7 +1342,7 @@ export function createAdminApp(pool: Pool): Hono {
 
   // --- Backups ---
 
-  admin.get("/backups", async (c) => {
+  admin.get("/backups", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
     const env = await readEnvFile();
 
@@ -1302,6 +1436,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <BackupsPage
           user={user}
+          isSuperuser={true}
           notifications={notifs(c)} version={APP_VERSION}
           localBackups={localBackups}
           cloudBackupNames={[...cloudBackupNames]}
@@ -1317,7 +1452,7 @@ export function createAdminApp(pool: Pool): Hono {
     );
   });
 
-  admin.post("/backups/run", async (c) => {
+  admin.post("/backups/run", requireSuperuser, async (c) => {
     // Trigger a manual backup by exec-ing into the db-backup container
     try {
       const containersRes = await fetch(`${DOCKER_API}/containers/json?all=true`);
@@ -1364,7 +1499,7 @@ export function createAdminApp(pool: Pool): Hono {
 
   // --- Config ---
 
-  admin.get("/config", async (c) => {
+  admin.get("/config", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
     const env = await readEnvFile();
 
@@ -1376,11 +1511,11 @@ export function createAdminApp(pool: Pool): Hono {
     }));
 
     return c.html(
-      (<ConfigPage user={user} notifications={notifs(c)} version={APP_VERSION} config={config} />) as unknown as string
+      (<ConfigPage user={user} isSuperuser={true} notifications={notifs(c)} version={APP_VERSION} config={config} />) as unknown as string
     );
   });
 
-  admin.post("/config", async (c) => {
+  admin.post("/config", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
     const body = await c.req.parseBody();
     const restartMcp = body._restart === "1";
@@ -1431,6 +1566,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <ConfigPage
           user={user}
+          isSuperuser={true}
           notifications={notifs(c)} version={APP_VERSION}
           config={config}
           flash={{
@@ -1444,7 +1580,7 @@ export function createAdminApp(pool: Pool): Hono {
 
   // --- Logs ---
 
-  admin.get("/logs", async (c) => {
+  admin.get("/logs", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
     const service = c.req.query("service") || "mcp-server";
 
@@ -1458,6 +1594,7 @@ export function createAdminApp(pool: Pool): Hono {
       (
         <LogsPage
           user={user}
+          isSuperuser={true}
           notifications={notifs(c)} version={APP_VERSION}
           service={service}
           logs={logs}
@@ -1467,9 +1604,77 @@ export function createAdminApp(pool: Pool): Hono {
     );
   });
 
+  // --- Account settings ---
+
+  admin.get("/account", async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const client = await pool.connect();
+    try {
+      const result = await client.queryObject<{ key_prefix: string }>(
+        "SELECT key_prefix FROM users WHERE id = $1",
+        [authUser.id]
+      );
+      return c.html(
+        (<AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} keyPrefix={result.rows[0]?.key_prefix || ""} />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  admin.post("/account/password", async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const currentPassword = String(body.current_password || "");
+    const newPassword = String(body.new_password || "");
+    const confirmPassword = String(body.confirm_password || "");
+
+    const client = await pool.connect();
+    try {
+      const result = await client.queryObject<{ key_prefix: string; password_hash: string }>(
+        "SELECT key_prefix, password_hash FROM users WHERE id = $1",
+        [authUser.id]
+      );
+      const row = result.rows[0];
+
+      const makeFlash = (msg: string) => (
+        <AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} keyPrefix={row?.key_prefix || ""} flash={{ type: "error", message: msg }} />
+      );
+
+      if (!row) {
+        return c.html(makeFlash("User not found.") as unknown as string);
+      }
+      if (newPassword.length < 8) {
+        return c.html(makeFlash("New password must be at least 8 characters.") as unknown as string);
+      }
+      if (newPassword !== confirmPassword) {
+        return c.html(makeFlash("New passwords do not match.") as unknown as string);
+      }
+
+      const valid = await verifyPassword(currentPassword, row.password_hash);
+      if (!valid) {
+        return c.html(makeFlash("Current password is incorrect.") as unknown as string);
+      }
+
+      const newHash = await hashPassword(newPassword);
+      await client.queryObject(
+        "UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [newHash, authUser.id]
+      );
+
+      return c.html(
+        (<AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} keyPrefix={row.key_prefix} flash={{ type: "success", message: "Password updated." }} />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
   // --- Service restart API ---
 
-  admin.post("/api/services/:name/restart", async (c) => {
+  admin.post("/api/services/:name/restart", requireSuperuser, async (c) => {
     const name = c.req.param("name");
     if (!COMPOSE_SERVICES.includes(name) || name === "docker-proxy") {
       return c.json({ error: "Cannot restart this service." }, 400);

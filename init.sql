@@ -9,23 +9,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Brain users (MCP client identities)
-CREATE TABLE IF NOT EXISTS brain_users (
+-- Users (unified: MCP client identity + admin panel login)
+CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    mcp_key_hash TEXT NOT NULL,
-    key_prefix TEXT NOT NULL DEFAULT '',
-    secondary_key_hash TEXT,
-    secondary_key_prefix TEXT,
+    name VARCHAR(100) NOT NULL,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL DEFAULT '',
+    mcp_key_hash VARCHAR(255) NOT NULL DEFAULT '',
+    key_prefix VARCHAR(8) NOT NULL DEFAULT '',
+    secondary_key_hash VARCHAR(255),
+    secondary_key_prefix VARCHAR(8),
+    is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     key_created_at TIMESTAMPTZ,
     secondary_key_created_at TIMESTAMPTZ,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    last_active_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_brain_users_name ON brain_users (name);
-CREATE INDEX IF NOT EXISTS idx_brain_users_key_prefix ON brain_users (key_prefix);
+CREATE INDEX IF NOT EXISTS idx_users_key_prefix ON users (key_prefix) WHERE key_prefix != '';
+CREATE INDEX IF NOT EXISTS idx_users_secondary_key_prefix ON users (secondary_key_prefix) WHERE secondary_key_prefix IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_is_active ON users (is_active) WHERE is_active = TRUE;
 
 -- Thoughts
 CREATE TABLE IF NOT EXISTS thoughts (
@@ -33,7 +38,7 @@ CREATE TABLE IF NOT EXISTS thoughts (
     content TEXT NOT NULL,
     embedding vector(1536),
     metadata JSONB DEFAULT '{}'::jsonb,
-    user_id BIGINT REFERENCES brain_users(id),
+    user_id BIGINT REFERENCES users(id),
     expires_at TIMESTAMPTZ,
     archived BOOLEAN DEFAULT FALSE,
     archived_at TIMESTAMPTZ,
@@ -62,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_thought_links_target ON thought_links (target_id)
 -- Digest configurations
 CREATE TABLE IF NOT EXISTS digest_configs (
     id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES brain_users(id),
+    user_id BIGINT NOT NULL REFERENCES users(id),
     frequency TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly')),
     delivery TEXT NOT NULL CHECK (delivery IN ('webhook')),
     webhook_url TEXT,
@@ -75,7 +80,7 @@ CREATE TABLE IF NOT EXISTS digest_configs (
 -- API usage tracking
 CREATE TABLE IF NOT EXISTS api_usage (
     id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES brain_users(id),
+    user_id BIGINT REFERENCES users(id),
     operation TEXT NOT NULL,
     model TEXT NOT NULL,
     prompt_tokens INT NOT NULL DEFAULT 0,
@@ -87,15 +92,6 @@ CREATE TABLE IF NOT EXISTS api_usage (
 CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage (user_id);
 CREATE INDEX IF NOT EXISTS idx_api_usage_created_at ON api_usage (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_usage_operation ON api_usage (operation);
-
--- Admin UI user accounts
-CREATE TABLE IF NOT EXISTS admin_users (
-    id BIGSERIAL PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
 
 -- Notifications (backup failures, system warnings, health alerts)
 CREATE TABLE IF NOT EXISTS notifications (
@@ -122,4 +118,4 @@ CREATE TABLE IF NOT EXISTS system_meta (
 );
 
 -- Mark all migrations as applied (fresh install has full schema)
-INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6), (7) ON CONFLICT DO NOTHING;
+INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6), (7), (8) ON CONFLICT DO NOTHING;

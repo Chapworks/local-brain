@@ -6,13 +6,14 @@ import type { LayoutNotification } from "./layout.tsx";
 
 interface Props {
   user: string;
+  isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
   graphData: string; // JSON string of { nodes, links }
 }
 
-export const GraphPage: FC<Props> = ({ user, notifications, version, graphData }) => (
-  <Layout title="Graph" user={user} notifications={notifications} version={version}>
+export const GraphPage: FC<Props> = ({ user, isSuperuser, notifications, version, graphData }) => (
+  <Layout title="Graph" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">Thought Connections</h1>
 
     <div class="card" style="position:relative; min-height:500px; padding:0; overflow:hidden">

@@ -85,43 +85,33 @@ Check logs:
 docker compose logs -f
 ```
 
-## Step 5 — Create an Admin User
+## Step 5 — Create Your User Account
+
+Create your user account. This gives you both an admin panel login and an MCP API key in one step.
 
 ```bash
 docker compose exec mcp-server deno run \
-  --allow-net --allow-env \
-  /app/scripts/create-user.ts admin YourSecurePassword123
+  --allow-net --allow-env --allow-read \
+  /app/scripts/create-user.ts nick YourSecurePassword123
 ```
 
-Replace `admin` and `YourSecurePassword123` with your preferred username and a strong password (minimum 8 characters).
+Replace `nick` with your username and `YourSecurePassword123` with a strong password (minimum 8 characters).
+
+The script prints a one-time **MCP API key** — **copy it now**, it cannot be recovered later. If you lose it, rotate to a new key with `--rotate`.
+
+The first user created is automatically a **superuser** with full admin access. Additional users can be created the same way — they'll be regular users by default (add `--superuser` flag to grant superuser access).
 
 Access the admin panel at: `http://localhost:8000/admin`
 
 See [ADMIN.md](ADMIN.md) for more details on the admin panel, including remote access mode.
 
-## Step 6 — Create a Brain User
-
-Create a named user for your MCP client. Each user gets their own API key and isolated thought namespace.
-
-```bash
-docker compose exec mcp-server deno run \
-  --allow-net --allow-env --allow-read \
-  /app/scripts/create-brain-user.ts nick
-```
-
-Replace `nick` with your name. The script prints a one-time API key — **copy it now**, it cannot be recovered later. If you lose it, create a new key with `--rotate`.
-
-You can create multiple brain users (e.g., one per device, or one for you and one for a family member). Each user's thoughts are isolated.
-
-> **Why not use `MCP_ACCESS_KEY`?** The global `MCP_ACCESS_KEY` in `.env` is a legacy auth mode. It authenticates requests but doesn't associate thoughts with a user — they end up with a blank owner. Brain user keys are the recommended approach: your thoughts are scoped to your user, visible in the admin panel under your name, and properly isolated in multi-user setups.
-
-## Step 7 — Connect an MCP Client
+## Step 6 — Connect an MCP Client
 
 ### Claude Code
 
 These commands install the MCP server globally (available in all Claude Code sessions). To install for a single project only, add `--scope project` instead of `--scope user`.
 
-Use the brain user API key from Step 6 (not the `MCP_ACCESS_KEY` from `.env`).
+Use the MCP API key from Step 5.
 
 **Remote access (via Cloudflare Tunnel):**
 
@@ -171,7 +161,7 @@ Add to `claude_desktop_config.json` (same format as above).
 
 Any client that supports MCP over HTTP can connect using the URL + access key.
 
-## Step 8 — Test
+## Step 7 — Test
 
 In Claude Code (or your MCP client), try:
 
@@ -225,11 +215,11 @@ Common issues: missing `.env` values, Docker not running, port 5432 already in u
 
 **MCP client can't connect:**
 - Verify the server is running: `curl http://localhost:8000/health`
-- Check that your brain user API key (from Step 6) is correct in your MCP client config
+- Check that your MCP API key (from Step 5) is correct in your MCP client config
 - For remote: verify the Cloudflare Tunnel is connected (`docker compose logs tunnel`)
 
-**Thoughts have no user / blank owner:**
-- You're using the global `MCP_ACCESS_KEY` instead of a brain user key. Create a brain user (Step 6) and update your MCP client config (Step 7) to use the brain user key instead.
+**"Global API key is deprecated" error:**
+- You're using the old `MCP_ACCESS_KEY` from `.env`. Create a user account (Step 5) and use the MCP API key from that instead.
 
 **Admin panel login fails:**
 - Make sure you created a user (Step 5)

@@ -7,6 +7,7 @@ import type { UsageSummary } from "../../usage.ts";
 
 interface Props {
   user: string;
+  isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
   summary: UsageSummary;
@@ -28,6 +29,7 @@ function formatTokens(n: number): string {
 
 export const UsagePage: FC<Props> = ({
   user,
+  isSuperuser,
   notifications,
   version,
   summary,
@@ -35,7 +37,7 @@ export const UsagePage: FC<Props> = ({
   brainUsers,
   filterUser,
 }) => (
-  <Layout title="AI Costs" user={user} notifications={notifications} version={version}>
+  <Layout title="AI Costs" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
     <h1 style="font-size:1.5rem; margin-bottom:1rem">AI Costs</h1>
 
     <div class="card">
