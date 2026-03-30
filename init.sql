@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS users (
     secondary_key_prefix VARCHAR(8),
     is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    recovery_code_hashes JSONB NOT NULL DEFAULT '[]',
+    admin_reset_policy VARCHAR(20) NOT NULL DEFAULT 'reset_full',
+    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ,
+    deleted_username VARCHAR(100),
+    deleted_name VARCHAR(100),
     key_created_at TIMESTAMPTZ,
     secondary_key_created_at TIMESTAMPTZ,
     last_active_at TIMESTAMPTZ,
@@ -31,6 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_key_prefix ON users (key_prefix) WHERE key_prefix != '';
 CREATE INDEX IF NOT EXISTS idx_users_secondary_key_prefix ON users (secondary_key_prefix) WHERE secondary_key_prefix IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_is_active ON users (is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_users_is_deleted ON users (is_deleted) WHERE is_deleted = TRUE;
 
 -- Thoughts
 CREATE TABLE IF NOT EXISTS thoughts (
@@ -42,6 +50,7 @@ CREATE TABLE IF NOT EXISTS thoughts (
     expires_at TIMESTAMPTZ,
     archived BOOLEAN DEFAULT FALSE,
     archived_at TIMESTAMPTZ,
+    trashed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -50,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_thoughts_metadata ON thoughts USING GIN (metadata
 CREATE INDEX IF NOT EXISTS idx_thoughts_user_id ON thoughts (user_id);
 CREATE INDEX IF NOT EXISTS idx_thoughts_expires_at ON thoughts (expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_thoughts_archived ON thoughts (archived) WHERE archived = TRUE;
+CREATE INDEX IF NOT EXISTS idx_thoughts_trashed_at ON thoughts (trashed_at) WHERE trashed_at IS NOT NULL;
 
 -- Thought connections
 CREATE TABLE IF NOT EXISTS thought_links (
@@ -57,12 +67,14 @@ CREATE TABLE IF NOT EXISTS thought_links (
     source_id BIGINT NOT NULL REFERENCES thoughts(id) ON DELETE CASCADE,
     target_id BIGINT NOT NULL REFERENCES thoughts(id) ON DELETE CASCADE,
     similarity FLOAT NOT NULL,
+    trashed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_id, target_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_thought_links_source ON thought_links (source_id);
 CREATE INDEX IF NOT EXISTS idx_thought_links_target ON thought_links (target_id);
+CREATE INDEX IF NOT EXISTS idx_thought_links_trashed_at ON thought_links (trashed_at) WHERE trashed_at IS NOT NULL;
 
 -- Digest configurations
 CREATE TABLE IF NOT EXISTS digest_configs (
@@ -118,4 +130,4 @@ CREATE TABLE IF NOT EXISTS system_meta (
 );
 
 -- Mark all migrations as applied (fresh install has full schema)
-INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6), (7), (8) ON CONFLICT DO NOTHING;
+INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9) ON CONFLICT DO NOTHING;

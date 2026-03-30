@@ -178,6 +178,12 @@ export const ThoughtsPage: FC<Props> = ({
                           {t.archived ? "Unarchive" : "Archive"}
                         </button>
                       </form>
+                      <form method="POST" action="/admin/thoughts/trash" style="margin:0">
+                        <input type="hidden" name="thought_id" value={String(t.id)} />
+                        <button type="submit" class="btn btn-danger" style="padding:0.2rem 0.4rem; font-size:0.7rem">
+                          Trash
+                        </button>
+                      </form>
                       {!t.archived && (
                         <form method="POST" action="/admin/thoughts/set-ttl" style="margin:0; display:flex; gap:0.25rem">
                           <input type="hidden" name="thought_id" value={String(t.id)} />

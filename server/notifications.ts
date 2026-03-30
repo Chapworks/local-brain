@@ -291,7 +291,7 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
   let thoughtCount = 0;
   try {
     const result = await client.queryObject<{ count: number }>(
-      "SELECT COUNT(*)::int AS count FROM thoughts WHERE archived = FALSE"
+      "SELECT COUNT(*)::int AS count FROM thoughts WHERE archived = FALSE AND trashed_at IS NULL"
     );
     thoughtCount = result.rows[0]?.count || 0;
 
@@ -301,7 +301,7 @@ export async function checkBackupHealth(pool: Pool): Promise<void> {
         name: string;
         key_created_at: string | null;
       }>(
-        "SELECT name, username, key_created_at FROM users WHERE is_active = TRUE AND key_created_at IS NOT NULL"
+        "SELECT name, username, key_created_at FROM users WHERE is_active = TRUE AND is_deleted = FALSE AND key_created_at IS NOT NULL"
       );
       for (const row of keyResult.rows) {
         if (row.key_created_at) {

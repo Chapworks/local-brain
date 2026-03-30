@@ -142,7 +142,7 @@ async function resolveUser(key: string): Promise<ResolveResult> {
       `SELECT id, name, username, mcp_key_hash, secondary_key_hash,
               is_superuser, password_hash = '' AS needs_password_setup
        FROM users
-       WHERE (key_prefix = $1 OR secondary_key_prefix = $1) AND is_active = TRUE`,
+       WHERE (key_prefix = $1 OR secondary_key_prefix = $1) AND is_active = TRUE AND is_deleted = FALSE`,
       [prefix]
     );
 
@@ -322,6 +322,7 @@ async function createThoughtLinks(
        WHERE t.id != $1
          AND t.embedding IS NOT NULL
          AND t.archived = FALSE
+         AND t.trashed_at IS NULL
          ${userClause}
          AND 1 - (t.embedding <=> $2::vector) >= $3
        ORDER BY t.embedding <=> $2::vector
@@ -374,7 +375,7 @@ server.registerTool(
 
       const client = await pool.connect();
       try {
-        const conditions = ["1 - (embedding <=> $1::vector) >= $2"];
+        const conditions = ["1 - (embedding <=> $1::vector) >= $2", "trashed_at IS NULL"];
         const params: unknown[] = [embStr, threshold];
         let paramIdx = 3;
 
@@ -471,7 +472,7 @@ server.registerTool(
   },
   async ({ limit, type, topic, person, days, include_archived }) => {
     try {
-      const conditions: string[] = [];
+      const conditions: string[] = ["trashed_at IS NULL"];
       const params: unknown[] = [];
       let paramIdx = 1;
 
@@ -576,8 +577,8 @@ server.registerTool(
       const client = await pool.connect();
       try {
         const scope = userScope(getCurrentUser(), 1);
-        const whereActive = `WHERE archived = FALSE AND ${scope.clause}`;
-        const whereAll = `WHERE ${scope.clause}`;
+        const whereActive = `WHERE archived = FALSE AND trashed_at IS NULL AND ${scope.clause}`;
+        const whereAll = `WHERE trashed_at IS NULL AND ${scope.clause}`;
 
         const countResult = await client.queryObject<{ count: number; archived_count: number }>(
           `SELECT
@@ -649,7 +650,8 @@ server.registerTool(
         const linkResult = await client.queryObject<{ count: number }>(
           `SELECT COUNT(*)::int AS count FROM thought_links tl
            JOIN thoughts t ON tl.source_id = t.id
-           ${userLinkClause}`,
+           ${userLinkClause}
+             AND tl.trashed_at IS NULL AND t.trashed_at IS NULL`,
           scope.params
         );
         if (linkResult.rows[0]?.count > 0) {
@@ -785,6 +787,7 @@ server.registerTool(
              JOIN thoughts ts ON ts.id = tl.source_id
              WHERE tl.source_id = $${pOff + 1}
                AND ${userClause}
+               AND tl.trashed_at IS NULL AND t.trashed_at IS NULL AND ts.trashed_at IS NULL
              ORDER BY tl.similarity DESC
              LIMIT $${pOff + 2}`,
             [...baseParams, thought_id, limit]
@@ -822,6 +825,7 @@ server.registerTool(
            JOIN thoughts ts ON ts.id = tl.source_id
            JOIN thoughts tt ON tt.id = tl.target_id
            WHERE ${userClause}
+             AND tl.trashed_at IS NULL AND ts.trashed_at IS NULL AND tt.trashed_at IS NULL
            ORDER BY tl.similarity DESC
            LIMIT $${pOff + 1}`,
           [...baseParams, limit]
@@ -871,7 +875,7 @@ server.registerTool(
     try {
       const client = await pool.connect();
       try {
-        const conditions: string[] = [];
+        const conditions: string[] = ["trashed_at IS NULL"];
         const params: unknown[] = [];
         let paramIdx = 1;
 
@@ -979,7 +983,7 @@ server.registerTool(
           `UPDATE thoughts
            SET archived = $1,
                archived_at = ${unarchive ? "NULL" : "CURRENT_TIMESTAMP"}
-           WHERE id = $2 AND ${scope.clause}`,
+           WHERE id = $2 AND trashed_at IS NULL AND ${scope.clause}`,
           [!unarchive, thought_id, ...scope.params]
         );
 
@@ -1090,13 +1094,13 @@ server.registerTool(
           `SELECT
             COUNT(*) FILTER (WHERE archived = FALSE)::int AS active,
             COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived
-           FROM thoughts`
+           FROM thoughts WHERE trashed_at IS NULL`
         );
         const usersResult = await client.queryObject<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE"
+          "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE AND is_deleted = FALSE"
         );
         const linksResult = await client.queryObject<{ count: number }>(
-          "SELECT COUNT(*)::int AS count FROM thought_links"
+          "SELECT COUNT(*)::int AS count FROM thought_links WHERE trashed_at IS NULL"
         );
 
         // --- Database size ---
@@ -1271,6 +1275,7 @@ try {
           WHERE expires_at IS NOT NULL
             AND expires_at <= CURRENT_TIMESTAMP
             AND archived = FALSE
+            AND trashed_at IS NULL
           RETURNING id
         )
         SELECT COUNT(*)::int AS count FROM archived`
@@ -1295,6 +1300,64 @@ try {
       await processDigests(pool);
     } catch (err) {
       console.error(`Cron digest error: ${(err as Error).message}`);
+    }
+  });
+} catch {
+  // Already logged above
+}
+
+// Cleanup trashed content — runs daily at 3 AM
+try {
+  Deno.cron("cleanup-trash", "0 3 * * *", async () => {
+    const client = await pool.connect();
+    try {
+      // Hard-delete trashed thoughts older than 30 days (CASCADE handles thought_links)
+      const thoughtResult = await client.queryObject<{ count: number }>(
+        `WITH deleted AS (
+          DELETE FROM thoughts
+          WHERE trashed_at IS NOT NULL
+            AND trashed_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
+          RETURNING id
+        )
+        SELECT COUNT(*)::int AS count FROM deleted`
+      );
+
+      // Hard-delete orphaned trashed links older than 30 days
+      const linkResult = await client.queryObject<{ count: number }>(
+        `WITH deleted AS (
+          DELETE FROM thought_links
+          WHERE trashed_at IS NOT NULL
+            AND trashed_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
+          RETURNING id
+        )
+        SELECT COUNT(*)::int AS count FROM deleted`
+      );
+
+      // Hard-delete expired soft-deleted users and their remaining data
+      // Clean up referencing rows first (api_usage, digest_configs) to avoid FK violations
+      const expiredUsers = await client.queryObject<{ id: number }>(
+        `SELECT id FROM users WHERE is_deleted = TRUE AND deleted_at < CURRENT_TIMESTAMP - INTERVAL '30 days'`
+      );
+      let uc = 0;
+      for (const { id } of expiredUsers.rows) {
+        try {
+          await client.queryObject("DELETE FROM api_usage WHERE user_id = $1", [id]);
+          await client.queryObject("DELETE FROM digest_configs WHERE user_id = $1", [id]);
+          await client.queryObject("DELETE FROM thoughts WHERE user_id = $1", [id]);
+          await client.queryObject("DELETE FROM users WHERE id = $1", [id]);
+          uc++;
+        } catch (err) {
+          console.error(`Cron cleanup: failed to delete user ${id}: ${(err as Error).message}`);
+        }
+      }
+
+      const tc = thoughtResult.rows[0]?.count || 0;
+      const lc = linkResult.rows[0]?.count || 0;
+      if (tc > 0 || lc > 0 || uc > 0) {
+        console.log(`Cron cleanup: ${tc} thoughts, ${lc} links, ${uc} users permanently deleted.`);
+      }
+    } finally {
+      client.release();
     }
   });
 } catch {

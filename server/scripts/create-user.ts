@@ -21,6 +21,7 @@
 import { Pool } from "postgres";
 import bcrypt from "bcrypt";
 import { hashPassword } from "../admin/auth.ts";
+import { generateKey, generateRecoveryCodes } from "../crypto-utils.ts";
 
 const pool = new Pool(
   {
@@ -48,15 +49,6 @@ if (!username || username.startsWith("--")) {
   Deno.exit(1);
 }
 
-/** Generate a random 64-char hex key. */
-function generateKey(): { fullKey: string; prefix: string } {
-  const rawBytes = new Uint8Array(32);
-  crypto.getRandomValues(rawBytes);
-  const fullKey = Array.from(rawBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return { fullKey, prefix: fullKey.slice(0, 8) };
-}
 
 const client = await pool.connect();
 
@@ -82,6 +74,7 @@ try {
     }
 
     const { fullKey, prefix } = generateKey();
+
     const keyHash = await bcrypt.hash(fullKey, 12);
 
     await client.queryObject(
@@ -195,12 +188,14 @@ try {
 
     const passHash = await hashPassword(password);
     const { fullKey, prefix } = generateKey();
+
     const keyHash = await bcrypt.hash(fullKey, 12);
+    const { plainCodes, hashes: codeHashes } = await generateRecoveryCodes();
 
     await client.queryObject(
-      `INSERT INTO users (name, username, password_hash, mcp_key_hash, key_prefix, is_superuser, key_created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
-      [username, username, passHash, keyHash, prefix, isSuperuser]
+      `INSERT INTO users (name, username, password_hash, mcp_key_hash, key_prefix, is_superuser, key_created_at, recovery_code_hashes)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7::jsonb)`,
+      [username, username, passHash, keyHash, prefix, isSuperuser, JSON.stringify(codeHashes)]
     );
 
     console.log(`\n  Created user: ${username}`);
@@ -209,8 +204,13 @@ try {
     }
     console.log(`\n  MCP Access Key: ${fullKey}`);
     console.log(`  Key Prefix:     ${prefix}`);
-    console.log(`\n  Save this key now — it cannot be retrieved later.`);
-    console.log(`  Use this key in the x-brain-key header when connecting MCP clients.`);
+    console.log(`\n  Recovery Codes (save these — they cannot be retrieved later):`);
+    for (const code of plainCodes) {
+      console.log(`    ${code}`);
+    }
+    console.log(`\n  Save this key and recovery codes now — they cannot be retrieved later.`);
+    console.log(`  Use the MCP key in the x-brain-key header when connecting MCP clients.`);
+    console.log(`  Use recovery codes to regain access if you lose your password.`);
     console.log(`\n  Admin panel: log in at /admin with username "${username}" and your password.`);
     console.log(`  For zero-downtime key rotation later, use: create-user.ts ${username} --rotate\n`);
   }

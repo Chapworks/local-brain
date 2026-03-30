@@ -100,8 +100,10 @@ export const Layout: FC<{
         <span class="brand">Local Brain{version && <span style="font-weight:400; font-size:0.75rem; color:#64748b; margin-left:0.5rem">v{version}</span>}</span>
         <a href="/admin">Dashboard</a>
         <a href="/admin/thoughts">Thoughts</a>
+        <a href="/admin/trash">Trash</a>
         <a href="/admin/graph">Graph</a>
         {isSuperuser && <a href="/admin/users">Users</a>}
+        {isSuperuser && <a href="/admin/orphaned">Unassigned</a>}
         <a href="/admin/import-export">Import/Export</a>
         <a href="/admin/digests">Digests</a>
         <a href="/admin/usage">AI Costs</a>

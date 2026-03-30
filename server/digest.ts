@@ -66,7 +66,7 @@ export async function generateDigest(
       metadata: Record<string, unknown>;
     }>(
       `SELECT content, metadata FROM thoughts
-       WHERE user_id = $1 AND archived = FALSE
+       WHERE user_id = $1 AND archived = FALSE AND trashed_at IS NULL
          AND created_at >= NOW() - make_interval(days => $2)
        ORDER BY created_at DESC`,
       [userId, intervalDays]

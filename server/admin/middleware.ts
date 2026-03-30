@@ -28,7 +28,7 @@ export const accessModeGuard = createMiddleware(async (c, next) => {
 /** Require a valid JWT session cookie. Skips the login page itself. */
 export const requireAuth = createMiddleware(async (c, next) => {
   const path = new URL(c.req.url).pathname;
-  if (path === "/admin/login") {
+  if (path === "/admin/login" || path === "/admin/recovery") {
     return next();
   }
 

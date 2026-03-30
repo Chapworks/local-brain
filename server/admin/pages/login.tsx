@@ -39,6 +39,9 @@ export const LoginPage: FC<{ error?: string }> = ({ error }) => (
           </div>
           <button type="submit" class="btn">Sign in</button>
         </form>
+        <p style="text-align:center; margin-top:1rem; font-size:0.8rem">
+          <a href="/admin/recovery" style="color:#60a5fa">Lost your password? Use a recovery code</a>
+        </p>
       </div>
     </body>
   </html>

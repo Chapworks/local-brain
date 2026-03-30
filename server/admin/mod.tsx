@@ -44,6 +44,10 @@ import { DigestsPage } from "./pages/digests.tsx";
 import { UsagePage } from "./pages/usage.tsx";
 import { BackupsPage } from "./pages/backups.tsx";
 import { AccountPage } from "./pages/account.tsx";
+import { RecoveryPage } from "./pages/recovery.tsx";
+import { CredentialsPage } from "./pages/credentials.tsx";
+import { TrashPage } from "./pages/trash.tsx";
+import { OrphanedPage } from "./pages/orphaned.tsx";
 import { getUsageSummary } from "../usage.ts";
 import {
   getActiveNotifications,
@@ -51,6 +55,13 @@ import {
   dismissAll,
   recordExport,
 } from "../notifications.ts";
+import {
+  verifyRecoveryCode,
+  generateKey,
+  generateRecoveryCodes,
+  generateTempPassword,
+  hashKey,
+} from "../crypto-utils.ts";
 import type { Notification } from "../notifications.ts";
 
 // Known .env keys and their sections for the config editor
@@ -255,7 +266,7 @@ async function restartService(service: string): Promise<boolean> {
 }
 
 /** Get users list with thought counts. */
-async function getUsers(pool: Pool): Promise<
+async function getActiveUsers(pool: Pool): Promise<
   { id: number; name: string; username: string; key_prefix: string; is_active: boolean; is_superuser: boolean; last_active_at: string | null; thought_count: number; created_at: string }[]
 > {
   const client = await pool.connect();
@@ -275,7 +286,8 @@ async function getUsers(pool: Pool): Promise<
               u.last_active_at, u.created_at,
               COALESCE(COUNT(t.id), 0)::int AS thought_count
        FROM users u
-       LEFT JOIN thoughts t ON t.user_id = u.id
+       LEFT JOIN thoughts t ON t.user_id = u.id AND t.trashed_at IS NULL
+       WHERE u.is_deleted = FALSE
        GROUP BY u.id
        ORDER BY u.created_at DESC`
     );
@@ -342,6 +354,30 @@ export function createAdminApp(pool: Pool): Hono {
   admin.use("*", accessModeGuard);
   admin.use("*", requireAuth);
 
+  // Enforce must_change_password — redirect to account page if flag is set
+  admin.use("*", async (c, next) => {
+    const authUser = c.get("authUser") as AuthUser | undefined;
+    if (authUser) {
+      const path = new URL(c.req.url).pathname.replace(/^\/admin/, "");
+      const exempt = ["/login", "/recovery", "/logout", "/account", "/account/password"];
+      if (!exempt.includes(path)) {
+        const client = await pool.connect();
+        try {
+          const r = await client.queryObject<{ must_change_password: boolean }>(
+            "SELECT must_change_password FROM users WHERE id = $1",
+            [authUser.id]
+          );
+          if (r.rows[0]?.must_change_password) {
+            return c.redirect("/admin/account?must_change=1");
+          }
+        } finally {
+          client.release();
+        }
+      }
+    }
+    return next();
+  });
+
   // Fetch active notifications for every request (used by Layout)
   admin.use("*", async (c, next) => {
     try {
@@ -361,6 +397,115 @@ export function createAdminApp(pool: Pool): Hono {
 
   admin.get("/login", (c) => {
     return c.html(<LoginPage /> as unknown as string);
+  });
+
+  // --- Recovery code login ---
+
+  admin.get("/recovery", (c) => {
+    return c.html(<RecoveryPage /> as unknown as string);
+  });
+
+  admin.post("/recovery", async (c) => {
+    const ip = getClientIp(c);
+    if (!checkRateLimit(ip)) {
+      return c.html(
+        (<RecoveryPage error="Too many attempts. Try again in a minute." />) as unknown as string,
+        429
+      );
+    }
+
+    const body = await c.req.parseBody();
+    const username = String(body.username || "").trim();
+    const recoveryCode = String(body.recovery_code || "").trim();
+    const newPassword = String(body.new_password || "");
+    const confirmPassword = String(body.confirm_password || "");
+
+    // Per-username rate limiting (3 attempts per minute) in addition to per-IP
+    if (username && !checkRateLimit(`recovery:${username}`)) {
+      return c.html(
+        (<RecoveryPage error="Too many recovery attempts for this account. Try again in a minute." />) as unknown as string,
+        429
+      );
+    }
+
+    if (!username || !recoveryCode || !newPassword) {
+      return c.html(
+        (<RecoveryPage error="All fields are required." />) as unknown as string
+      );
+    }
+    if (newPassword.length < 8) {
+      return c.html(
+        (<RecoveryPage error="New password must be at least 8 characters." />) as unknown as string
+      );
+    }
+    if (newPassword !== confirmPassword) {
+      return c.html(
+        (<RecoveryPage error="Passwords do not match." />) as unknown as string
+      );
+    }
+
+    const client = await pool.connect();
+    try {
+      const result = await client.queryObject<{
+        id: number;
+        is_active: boolean;
+        is_superuser: boolean;
+        recovery_code_hashes: string[];
+      }>(
+        "SELECT id, is_active, is_superuser, recovery_code_hashes FROM users WHERE username = $1 AND is_deleted = FALSE",
+        [username]
+      );
+
+      if (!result.rows.length) {
+        return c.html(
+          (<RecoveryPage error="Invalid username or recovery code." />) as unknown as string
+        );
+      }
+
+      const row = result.rows[0];
+      if (!row.is_active) {
+        return c.html(
+          (<RecoveryPage error="Account is disabled." />) as unknown as string
+        );
+      }
+
+      const codeHashes = Array.isArray(row.recovery_code_hashes) ? row.recovery_code_hashes : [];
+      if (codeHashes.length === 0) {
+        return c.html(
+          (<RecoveryPage error="No recovery codes available for this account." />) as unknown as string
+        );
+      }
+
+      const { valid, remainingHashes } = await verifyRecoveryCode(recoveryCode, codeHashes);
+      if (!valid) {
+        return c.html(
+          (<RecoveryPage error="Invalid username or recovery code." />) as unknown as string
+        );
+      }
+
+      // Code is valid — update password and consume the code
+      const newHash = await hashPassword(newPassword);
+      await client.queryObject(
+        `UPDATE users SET password_hash = $1, recovery_code_hashes = $2::jsonb,
+                must_change_password = FALSE, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [newHash, JSON.stringify(remainingHashes), row.id]
+      );
+
+      // Issue session
+      const token = await createToken(Number(row.id), username, row.is_superuser);
+      setCookie(c, COOKIE_NAME, token, {
+        httpOnly: true,
+        secure: ACCESS_MODE === "remote",
+        sameSite: "Lax",
+        path: "/admin",
+        maxAge: 7 * 24 * 60 * 60,
+      });
+
+      return c.redirect("/admin");
+    } finally {
+      client.release();
+    }
   });
 
   admin.post("/login", async (c) => {
@@ -393,7 +538,7 @@ export function createAdminApp(pool: Pool): Hono {
         is_superuser: boolean;
         is_active: boolean;
       }>(
-        "SELECT id, password_hash, is_superuser, is_active FROM users WHERE username = $1",
+        "SELECT id, password_hash, is_superuser, is_active FROM users WHERE username = $1 AND is_deleted = FALSE",
         [username]
       );
 
@@ -490,7 +635,7 @@ export function createAdminApp(pool: Pool): Hono {
           COUNT(*) FILTER (WHERE archived = TRUE)::int AS archived,
           MIN(created_at) FILTER (WHERE archived = FALSE)::text AS min_date,
           MAX(created_at) FILTER (WHERE archived = FALSE)::text AS max_date
-         FROM thoughts WHERE TRUE ${userFilter}`,
+         FROM thoughts WHERE trashed_at IS NULL ${userFilter}`,
         userParams
       );
 
@@ -505,7 +650,7 @@ export function createAdminApp(pool: Pool): Hono {
       // Types via SQL aggregation
       const typesResult = await client.queryObject<{ type: string; count: number }>(
         `SELECT metadata->>'type' AS type, COUNT(*)::int AS count
-         FROM thoughts WHERE archived = FALSE AND metadata->>'type' IS NOT NULL ${userFilter}
+         FROM thoughts WHERE archived = FALSE AND trashed_at IS NULL AND metadata->>'type' IS NOT NULL ${userFilter}
          GROUP BY metadata->>'type' ORDER BY count DESC`,
         userParams
       );
@@ -516,7 +661,7 @@ export function createAdminApp(pool: Pool): Hono {
       const topTopicsResult = await client.queryObject<{ topic: string; count: number }>(
         `SELECT t.topic, COUNT(*)::int AS count
          FROM thoughts, jsonb_array_elements_text(metadata->'topics') AS t(topic)
-         WHERE archived = FALSE ${userFilter}
+         WHERE archived = FALSE AND trashed_at IS NULL ${userFilter}
          GROUP BY t.topic ORDER BY count DESC LIMIT 10`,
         userParams
       );
@@ -538,12 +683,12 @@ export function createAdminApp(pool: Pool): Hono {
 
       // User count and connection count
       const activeUsersResult = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE"
+        "SELECT COUNT(*)::int AS count FROM users WHERE is_active = TRUE AND is_deleted = FALSE"
       );
       const linksResult = await client.queryObject<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM thought_links tl
          JOIN thoughts ts ON ts.id = tl.source_id
-         WHERE TRUE ${userFilter ? "AND ts.user_id = $1" : ""}`,
+         WHERE tl.trashed_at IS NULL AND ts.trashed_at IS NULL ${userFilter ? "AND ts.user_id = $1" : ""}`,
         userParams
       );
 
@@ -586,7 +731,7 @@ export function createAdminApp(pool: Pool): Hono {
     const client = await pool.connect();
     try {
       // Always scope to current user — even superusers only see their own thoughts
-      const conditions: string[] = [`t.user_id = $1`];
+      const conditions: string[] = [`t.user_id = $1`, `t.trashed_at IS NULL`];
       const params: unknown[] = [authUser.id];
       let paramIdx = 2;
 
@@ -637,11 +782,11 @@ export function createAdminApp(pool: Pool): Hono {
 
       // Get types and topics for filter dropdowns (scoped to current user)
       const typesResult = await client.queryObject<{ type: string }>(
-        "SELECT DISTINCT metadata->>'type' AS type FROM thoughts WHERE metadata->>'type' IS NOT NULL AND user_id = $1 ORDER BY type",
+        "SELECT DISTINCT metadata->>'type' AS type FROM thoughts WHERE metadata->>'type' IS NOT NULL AND user_id = $1 AND trashed_at IS NULL ORDER BY type",
         [authUser.id]
       );
       const topicsResult = await client.queryObject<{ topic: string }>(
-        "SELECT DISTINCT jsonb_array_elements_text(metadata->'topics') AS topic FROM thoughts WHERE user_id = $1 ORDER BY topic",
+        "SELECT DISTINCT jsonb_array_elements_text(metadata->'topics') AS topic FROM thoughts WHERE user_id = $1 AND trashed_at IS NULL ORDER BY topic",
         [authUser.id]
       );
 
@@ -720,15 +865,169 @@ export function createAdminApp(pool: Pool): Hono {
     return c.redirect("/admin/thoughts");
   });
 
+  // --- Thought trash actions ---
+
+  admin.post("/thoughts/trash", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const thoughtId = parseInt(String(body.thought_id), 10);
+
+    if (!thoughtId) return c.redirect("/admin/thoughts");
+
+    const client = await pool.connect();
+    try {
+      await client.queryObject(
+        "UPDATE thoughts SET trashed_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND trashed_at IS NULL",
+        [thoughtId, authUser.id]
+      );
+      // Trash associated links (scoped: only links where the other endpoint belongs to the same user)
+      await client.queryObject(
+        `UPDATE thought_links SET trashed_at = CURRENT_TIMESTAMP
+         FROM thoughts t
+         WHERE (thought_links.source_id = $1 OR thought_links.target_id = $1)
+           AND (t.id = thought_links.source_id OR t.id = thought_links.target_id)
+           AND t.user_id = $2
+           AND thought_links.trashed_at IS NULL`,
+        [thoughtId, authUser.id]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/thoughts");
+  });
+
+  admin.post("/thoughts/restore", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const thoughtId = parseInt(String(body.thought_id), 10);
+
+    if (!thoughtId) return c.redirect("/admin/trash");
+
+    const client = await pool.connect();
+    try {
+      await client.queryObject(
+        "UPDATE thoughts SET trashed_at = NULL WHERE id = $1 AND user_id = $2 AND trashed_at IS NOT NULL",
+        [thoughtId, authUser.id]
+      );
+      // Restore links where both endpoints are non-trashed and belong to the user
+      await client.queryObject(
+        `UPDATE thought_links SET trashed_at = NULL
+         WHERE (source_id = $1 OR target_id = $1) AND trashed_at IS NOT NULL
+           AND EXISTS (SELECT 1 FROM thoughts t1 WHERE t1.id = thought_links.source_id AND t1.trashed_at IS NULL AND t1.user_id = $2)
+           AND EXISTS (SELECT 1 FROM thoughts t2 WHERE t2.id = thought_links.target_id AND t2.trashed_at IS NULL AND t2.user_id = $2)`,
+        [thoughtId, authUser.id]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/trash");
+  });
+
+  admin.post("/thoughts/permanent-delete", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const thoughtId = parseInt(String(body.thought_id), 10);
+
+    if (!thoughtId) return c.redirect("/admin/trash");
+
+    const client = await pool.connect();
+    try {
+      // Only allow permanent delete on already-trashed thoughts
+      await client.queryObject(
+        "DELETE FROM thoughts WHERE id = $1 AND user_id = $2 AND trashed_at IS NOT NULL",
+        [thoughtId, authUser.id]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/trash");
+  });
+
+  admin.post("/trash/empty", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+
+    const client = await pool.connect();
+    try {
+      await client.queryObject(
+        "DELETE FROM thoughts WHERE user_id = $1 AND trashed_at IS NOT NULL",
+        [authUser.id]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/trash");
+  });
+
+  // --- Trash view ---
+
+  admin.get("/trash", async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const client = await pool.connect();
+
+    try {
+      const result = await client.queryObject<{
+        id: number;
+        content: string;
+        metadata: Record<string, unknown>;
+        created_at: string;
+        trashed_at: string;
+      }>(
+        `SELECT id, content, metadata, created_at, trashed_at
+         FROM thoughts
+         WHERE user_id = $1 AND trashed_at IS NOT NULL
+         ORDER BY trashed_at DESC`,
+        [authUser.id]
+      );
+
+      return c.html(
+        (<TrashPage
+          user={user}
+          isSuperuser={authUser.isSuperuser}
+          notifications={notifs(c)}
+          version={APP_VERSION}
+          thoughts={result.rows}
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
   // --- Users (superuser only) ---
 
   admin.get("/users", requireSuperuser, async (c) => {
     const user = c.get("user") as string;
     const authUser = c.get("authUser") as AuthUser;
-    const allUsers = await getUsers(pool);
+    const allUsers = await getActiveUsers(pool);
+
+    // Fetch deleted users within 30-day retention window
+    const client = await pool.connect();
+    let deletedUsers: { id: number; deleted_username: string; deleted_name: string; deleted_at: string }[] = [];
+    try {
+      const result = await client.queryObject<{
+        id: number;
+        deleted_username: string;
+        deleted_name: string;
+        deleted_at: string;
+      }>(
+        `SELECT id, deleted_username, deleted_name, deleted_at
+         FROM users
+         WHERE is_deleted = TRUE AND deleted_at > CURRENT_TIMESTAMP - INTERVAL '30 days'
+         ORDER BY deleted_at DESC`
+      );
+      deletedUsers = result.rows;
+    } finally {
+      client.release();
+    }
 
     return c.html(
-      (<UsersPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} users={allUsers} currentUserId={authUser.id} />) as unknown as string
+      (<UsersPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+        users={allUsers} deletedUsers={deletedUsers} currentUserId={authUser.id} />) as unknown as string
     );
   });
 
@@ -816,6 +1115,409 @@ export function createAdminApp(pool: Pool): Hono {
     return c.redirect("/admin/users");
   });
 
+  // --- Delete user (superuser only) ---
+
+  admin.post("/users/delete", requireSuperuser, async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const userId = parseInt(String(body.user_id), 10);
+
+    // Cannot delete self
+    if (userId === authUser.id) {
+      return c.redirect("/admin/users");
+    }
+
+    const client = await pool.connect();
+    try {
+      // Check target user exists and is not already deleted
+      const target = await client.queryObject<{
+        username: string;
+        name: string;
+        is_superuser: boolean;
+        is_active: boolean;
+      }>(
+        "SELECT username, name, is_superuser, is_active FROM users WHERE id = $1 AND is_deleted = FALSE",
+        [userId]
+      );
+
+      if (!target.rows.length) {
+        return c.redirect("/admin/users");
+      }
+
+      const { username: targetUsername, name: targetName, is_superuser: targetIsSu } = target.rows[0];
+
+      // Cannot delete last active superuser
+      if (targetIsSu) {
+        const suCount = await client.queryObject<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM users WHERE is_superuser = TRUE AND is_active = TRUE AND is_deleted = FALSE AND id != $1",
+          [userId]
+        );
+        if ((suCount.rows[0]?.count || 0) < 1) {
+          return c.redirect("/admin/users");
+        }
+      }
+
+      // Soft-delete in a transaction
+      await client.queryObject("BEGIN");
+      try {
+        // Save originals and soft-delete the user
+        await client.queryObject(
+          `UPDATE users SET
+            is_deleted = TRUE,
+            deleted_at = CURRENT_TIMESTAMP,
+            deleted_username = $2,
+            deleted_name = $3,
+            username = $4,
+            name = '[DELETED]',
+            is_active = FALSE,
+            password_hash = '',
+            mcp_key_hash = '',
+            key_prefix = '',
+            secondary_key_hash = NULL,
+            secondary_key_prefix = NULL,
+            recovery_code_hashes = '[]'::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [userId, targetUsername, targetName, `[DELETED]-${targetUsername}-${userId}`]
+        );
+
+        // Trash all user's thoughts
+        await client.queryObject(
+          "UPDATE thoughts SET trashed_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND trashed_at IS NULL",
+          [userId]
+        );
+
+        // Trash all links for user's thoughts
+        await client.queryObject(
+          `UPDATE thought_links SET trashed_at = CURRENT_TIMESTAMP
+           FROM thoughts t
+           WHERE (thought_links.source_id = t.id OR thought_links.target_id = t.id)
+             AND t.user_id = $1 AND thought_links.trashed_at IS NULL`,
+          [userId]
+        );
+
+        await client.queryObject("COMMIT");
+      } catch (err) {
+        await client.queryObject("ROLLBACK");
+        throw err;
+      }
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/users");
+  });
+
+  // --- Restore user (superuser only) ---
+
+  admin.post("/users/restore", requireSuperuser, async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const userId = parseInt(String(body.user_id), 10);
+
+    const client = await pool.connect();
+    try {
+      const target = await client.queryObject<{
+        deleted_username: string;
+        deleted_name: string;
+        deleted_at: string;
+      }>(
+        "SELECT deleted_username, deleted_name, deleted_at FROM users WHERE id = $1 AND is_deleted = TRUE",
+        [userId]
+      );
+
+      if (!target.rows.length) {
+        return c.redirect("/admin/users");
+      }
+
+      const { deleted_username, deleted_name, deleted_at } = target.rows[0];
+
+      // Check within 30-day window
+      const daysSinceDelete = (Date.now() - new Date(deleted_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceDelete > 30) {
+        return c.redirect("/admin/users");
+      }
+
+      const tempPassword = generateTempPassword();
+      const passHash = await hashPassword(tempPassword);
+      const { fullKey, prefix } = generateKey();
+      const keyHash = await hashKey(fullKey);
+      const { plainCodes, hashes: codeHashes } = await generateRecoveryCodes();
+
+      let restoredUsername = deleted_username;
+      await client.queryObject("BEGIN");
+      try {
+        // Check username collision inside transaction to avoid race
+        const collision = await client.queryObject<{ id: number }>(
+          "SELECT id FROM users WHERE username = $1 AND id != $2",
+          [deleted_username, userId]
+        );
+        if (collision.rows.length > 0) {
+          restoredUsername = `${deleted_username}-restored`;
+        }
+
+        await client.queryObject(
+          `UPDATE users SET
+            is_deleted = FALSE,
+            deleted_at = NULL,
+            deleted_username = NULL,
+            deleted_name = NULL,
+            username = $2,
+            name = $3,
+            is_active = TRUE,
+            password_hash = $4,
+            mcp_key_hash = $5,
+            key_prefix = $6,
+            must_change_password = TRUE,
+            key_created_at = CURRENT_TIMESTAMP,
+            recovery_code_hashes = $7::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+          [userId, restoredUsername, deleted_name, passHash, keyHash, prefix, JSON.stringify(codeHashes)]
+        );
+
+        // Un-trash all content
+        await client.queryObject(
+          "UPDATE thoughts SET trashed_at = NULL WHERE user_id = $1 AND trashed_at IS NOT NULL",
+          [userId]
+        );
+        await client.queryObject(
+          `UPDATE thought_links SET trashed_at = NULL
+           FROM thoughts t
+           WHERE (thought_links.source_id = t.id OR thought_links.target_id = t.id)
+             AND t.user_id = $1 AND thought_links.trashed_at IS NOT NULL`,
+          [userId]
+        );
+
+        await client.queryObject("COMMIT");
+      } catch (err) {
+        await client.queryObject("ROLLBACK");
+        throw err;
+      }
+
+      return c.html(
+        (<CredentialsPage
+          user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+          title="Account Restored"
+          targetUsername={restoredUsername}
+          tempPassword={tempPassword}
+          mcpKey={fullKey}
+          recoveryCodes={plainCodes}
+          message="Account and all content have been restored."
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  // --- Create user (superuser only) ---
+
+  admin.post("/users/create", requireSuperuser, async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const newUsername = String(body.username || "").trim().toLowerCase();
+    const makeSuperuser = body.is_superuser === "true";
+
+    if (!newUsername || newUsername.length < 3 || !/^[a-z0-9][a-z0-9-]*$/.test(newUsername)) {
+      return c.redirect("/admin/users");
+    }
+
+    const client = await pool.connect();
+    try {
+      // Check uniqueness (including deleted usernames)
+      const exists = await client.queryObject<{ id: number }>(
+        "SELECT id FROM users WHERE username = $1 OR deleted_username = $1",
+        [newUsername]
+      );
+      if (exists.rows.length > 0) {
+        return c.redirect("/admin/users");
+      }
+
+      const tempPassword = generateTempPassword();
+      const passHash = await hashPassword(tempPassword);
+      const { fullKey, prefix } = generateKey();
+      const keyHash = await hashKey(fullKey);
+      const { plainCodes, hashes: codeHashes } = await generateRecoveryCodes();
+
+      await client.queryObject(
+        `INSERT INTO users (name, username, password_hash, mcp_key_hash, key_prefix, is_superuser, must_change_password, key_created_at, recovery_code_hashes)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, CURRENT_TIMESTAMP, $7::jsonb)`,
+        [newUsername, newUsername, passHash, keyHash, prefix, makeSuperuser, JSON.stringify(codeHashes)]
+      );
+
+      return c.html(
+        (<CredentialsPage
+          user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+          title="User Created"
+          targetUsername={newUsername}
+          tempPassword={tempPassword}
+          mcpKey={fullKey}
+          recoveryCodes={plainCodes}
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  // --- Superuser password reset ---
+
+  admin.post("/users/reset-password", requireSuperuser, async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const userId = parseInt(String(body.user_id), 10);
+
+    if (userId === authUser.id) {
+      return c.redirect("/admin/users");
+    }
+
+    const client = await pool.connect();
+    try {
+      const result = await client.queryObject<{
+        username: string;
+        admin_reset_policy: string;
+      }>(
+        "SELECT username, admin_reset_policy FROM users WHERE id = $1 AND is_deleted = FALSE",
+        [userId]
+      );
+
+      if (!result.rows.length) {
+        return c.redirect("/admin/users");
+      }
+
+      const { username: targetUsername, admin_reset_policy } = result.rows[0];
+
+      if (admin_reset_policy === "none") {
+        // User does not allow admin resets — redirect with no action
+        return c.redirect("/admin/users");
+      }
+
+      if (admin_reset_policy === "reset_lossy") {
+        // Trash all user's content before reset
+        await client.queryObject(
+          "UPDATE thoughts SET trashed_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND trashed_at IS NULL",
+          [userId]
+        );
+        // Trash links for those thoughts
+        await client.queryObject(
+          `UPDATE thought_links SET trashed_at = CURRENT_TIMESTAMP
+           FROM thoughts t
+           WHERE (thought_links.source_id = t.id OR thought_links.target_id = t.id)
+             AND t.user_id = $1 AND thought_links.trashed_at IS NULL`,
+          [userId]
+        );
+        // Delete digest configs
+        await client.queryObject(
+          "DELETE FROM digest_configs WHERE user_id = $1",
+          [userId]
+        );
+      }
+
+      const tempPassword = generateTempPassword();
+      const passHash = await hashPassword(tempPassword);
+      const { plainCodes, hashes: codeHashes } = await generateRecoveryCodes();
+
+      await client.queryObject(
+        `UPDATE users SET password_hash = $1, must_change_password = TRUE,
+                recovery_code_hashes = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [passHash, JSON.stringify(codeHashes), userId]
+      );
+
+      return c.html(
+        (<CredentialsPage
+          user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+          title="Password Reset"
+          targetUsername={targetUsername}
+          tempPassword={tempPassword}
+          recoveryCodes={plainCodes}
+          message={admin_reset_policy === "reset_lossy" ? "User's thoughts and journals have been trashed." : undefined}
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  // --- Orphaned thoughts (superuser only) ---
+
+  admin.get("/orphaned", requireSuperuser, async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const client = await pool.connect();
+
+    try {
+      const thoughtsResult = await client.queryObject<{
+        id: number;
+        content: string;
+        metadata: Record<string, unknown>;
+        created_at: string;
+      }>(
+        `SELECT id, content, metadata, created_at
+         FROM thoughts
+         WHERE user_id IS NULL AND trashed_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 200`
+      );
+
+      const usersResult = await client.queryObject<{
+        id: number;
+        name: string;
+        username: string;
+      }>(
+        "SELECT id, name, username FROM users WHERE is_active = TRUE AND is_deleted = FALSE ORDER BY name"
+      );
+
+      return c.html(
+        (<OrphanedPage
+          user={user}
+          isSuperuser={authUser.isSuperuser}
+          notifications={notifs(c)}
+          version={APP_VERSION}
+          thoughts={thoughtsResult.rows}
+          users={usersResult.rows}
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  admin.post("/orphaned/reassign", requireSuperuser, async (c) => {
+    const body = await c.req.parseBody();
+    const thoughtId = parseInt(String(body.thought_id), 10);
+    const targetUserId = parseInt(String(body.target_user_id), 10);
+
+    if (!thoughtId || !targetUserId) {
+      return c.redirect("/admin/orphaned");
+    }
+
+    const client = await pool.connect();
+    try {
+      // Verify target user exists and is active
+      const userCheck = await client.queryObject<{ id: number }>(
+        "SELECT id FROM users WHERE id = $1 AND is_active = TRUE AND is_deleted = FALSE",
+        [targetUserId]
+      );
+      if (!userCheck.rows.length) {
+        return c.redirect("/admin/orphaned");
+      }
+
+      await client.queryObject(
+        "UPDATE thoughts SET user_id = $1 WHERE id = $2 AND user_id IS NULL",
+        [targetUserId, thoughtId]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/orphaned");
+  });
+
   // --- Graph ---
 
   admin.get("/graph", async (c) => {
@@ -834,10 +1536,10 @@ export function createAdminApp(pool: Pool): Hono {
         `SELECT t.id, t.content, t.metadata->>'type' AS type,
                 (SELECT COUNT(*)::int FROM thought_links tl
                  JOIN thoughts t2 ON (t2.id = CASE WHEN tl.source_id = t.id THEN tl.target_id ELSE tl.source_id END)
-                 WHERE (tl.source_id = t.id OR tl.target_id = t.id) AND t2.user_id = $1) AS link_count
+                 WHERE (tl.source_id = t.id OR tl.target_id = t.id) AND t2.user_id = $1 AND tl.trashed_at IS NULL AND t2.trashed_at IS NULL) AS link_count
          FROM thoughts t
-         WHERE t.archived = FALSE AND t.user_id = $1
-           AND EXISTS (SELECT 1 FROM thought_links tl WHERE tl.source_id = t.id OR tl.target_id = t.id)
+         WHERE t.archived = FALSE AND t.trashed_at IS NULL AND t.user_id = $1
+           AND EXISTS (SELECT 1 FROM thought_links tl WHERE (tl.source_id = t.id OR tl.target_id = t.id) AND tl.trashed_at IS NULL)
          ORDER BY link_count DESC
          LIMIT 200`,
         [authUser.id]
@@ -855,6 +1557,7 @@ export function createAdminApp(pool: Pool): Hono {
          JOIN thoughts ts ON ts.id = tl.source_id
          JOIN thoughts tt ON tt.id = tl.target_id
          WHERE ts.user_id = $1 AND tt.user_id = $1
+           AND tl.trashed_at IS NULL AND ts.trashed_at IS NULL AND tt.trashed_at IS NULL
          ORDER BY tl.similarity DESC
          LIMIT 500`,
         [authUser.id]
@@ -887,7 +1590,7 @@ export function createAdminApp(pool: Pool): Hono {
 
     try {
       const countResult = await client.queryObject<{ count: number }>(
-        "SELECT COUNT(*)::int AS count FROM thoughts WHERE user_id = $1",
+        "SELECT COUNT(*)::int AS count FROM thoughts WHERE user_id = $1 AND trashed_at IS NULL",
         [authUser.id]
       );
 
@@ -916,7 +1619,7 @@ export function createAdminApp(pool: Pool): Hono {
     const client = await pool.connect();
     try {
       // Always scope to current user
-      const conditions: string[] = ["user_id = $1"];
+      const conditions: string[] = ["user_id = $1", "trashed_at IS NULL"];
       const params: unknown[] = [authUser.id];
       let paramIdx = 2;
 
@@ -1260,6 +1963,7 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/digests/toggle", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const configId = parseInt(String(body.config_id), 10);
     const isActive = body.is_active === "true";
@@ -1267,8 +1971,8 @@ export function createAdminApp(pool: Pool): Hono {
     const client = await pool.connect();
     try {
       await client.queryObject(
-        "UPDATE digest_configs SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-        [isActive, configId]
+        "UPDATE digest_configs SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3",
+        [isActive, configId, authUser.id]
       );
     } finally {
       client.release();
@@ -1278,12 +1982,16 @@ export function createAdminApp(pool: Pool): Hono {
   });
 
   admin.post("/digests/delete", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
     const body = await c.req.parseBody();
     const configId = parseInt(String(body.config_id), 10);
 
     const client = await pool.connect();
     try {
-      await client.queryObject("DELETE FROM digest_configs WHERE id = $1", [configId]);
+      await client.queryObject(
+        "DELETE FROM digest_configs WHERE id = $1 AND user_id = $2",
+        [configId, authUser.id]
+      );
     } finally {
       client.release();
     }
@@ -1612,14 +2320,30 @@ export function createAdminApp(pool: Pool): Hono {
   admin.get("/account", async (c) => {
     const user = c.get("user") as string;
     const authUser = c.get("authUser") as AuthUser;
+    const mustChange = c.req.query("must_change") === "1";
     const client = await pool.connect();
     try {
-      const result = await client.queryObject<{ key_prefix: string }>(
-        "SELECT key_prefix FROM users WHERE id = $1",
+      const result = await client.queryObject<{
+        key_prefix: string;
+        recovery_code_hashes: string[];
+        admin_reset_policy: string;
+      }>(
+        "SELECT key_prefix, recovery_code_hashes, admin_reset_policy FROM users WHERE id = $1",
         [authUser.id]
       );
+      const row = result.rows[0];
+      const codeHashes = Array.isArray(row?.recovery_code_hashes) ? row.recovery_code_hashes : [];
       return c.html(
-        (<AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION} keyPrefix={result.rows[0]?.key_prefix || ""} />) as unknown as string
+        (<AccountPage
+          user={user}
+          isSuperuser={authUser.isSuperuser}
+          notifications={notifs(c)}
+          version={APP_VERSION}
+          keyPrefix={row?.key_prefix || ""}
+          recoveryCodeCount={codeHashes.length}
+          adminResetPolicy={row?.admin_reset_policy || "reset_full"}
+          mustChangePassword={mustChange}
+        />) as unknown as string
       );
     } finally {
       client.release();
@@ -1663,7 +2387,7 @@ export function createAdminApp(pool: Pool): Hono {
 
       const newHash = await hashPassword(newPassword);
       await client.queryObject(
-        "UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        "UPDATE users SET password_hash = $1, must_change_password = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
         [newHash, authUser.id]
       );
 
@@ -1673,6 +2397,84 @@ export function createAdminApp(pool: Pool): Hono {
     } finally {
       client.release();
     }
+  });
+
+  // --- Recovery code regeneration ---
+
+  admin.post("/account/recovery-codes", async (c) => {
+    const user = c.get("user") as string;
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const currentPassword = String(body.current_password || "");
+
+    const client = await pool.connect();
+    try {
+      const result = await client.queryObject<{ password_hash: string }>(
+        "SELECT password_hash FROM users WHERE id = $1",
+        [authUser.id]
+      );
+
+      if (!result.rows.length) {
+        return c.redirect("/admin/account");
+      }
+
+      const valid = await verifyPassword(currentPassword, result.rows[0].password_hash);
+      if (!valid) {
+        const userRow = await client.queryObject<{ key_prefix: string; recovery_code_hashes: string[]; admin_reset_policy: string }>(
+          "SELECT key_prefix, recovery_code_hashes, admin_reset_policy FROM users WHERE id = $1",
+          [authUser.id]
+        );
+        const row = userRow.rows[0];
+        const codeHashes = Array.isArray(row?.recovery_code_hashes) ? row.recovery_code_hashes : [];
+        return c.html(
+          (<AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+            keyPrefix={row?.key_prefix || ""} recoveryCodeCount={codeHashes.length} adminResetPolicy={row?.admin_reset_policy || "reset_full"}
+            flash={{ type: "error", message: "Current password is incorrect." }} />) as unknown as string
+        );
+      }
+
+      const { plainCodes, hashes } = await generateRecoveryCodes();
+
+      await client.queryObject(
+        "UPDATE users SET recovery_code_hashes = $1::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [JSON.stringify(hashes), authUser.id]
+      );
+
+      // Render a one-time display of the new codes
+      return c.html(
+        (<AccountPage user={user} isSuperuser={authUser.isSuperuser} notifications={notifs(c)} version={APP_VERSION}
+          keyPrefix="" recoveryCodeCount={8} adminResetPolicy="reset_full"
+          newRecoveryCodes={plainCodes}
+          flash={{ type: "success", message: "Recovery codes regenerated. Save these codes now — they will not be shown again." }}
+        />) as unknown as string
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  // --- Admin reset policy ---
+
+  admin.post("/account/reset-policy", async (c) => {
+    const authUser = c.get("authUser") as AuthUser;
+    const body = await c.req.parseBody();
+    const policy = String(body.admin_reset_policy || "");
+
+    if (!["none", "reset_lossy", "reset_full"].includes(policy)) {
+      return c.redirect("/admin/account");
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.queryObject(
+        "UPDATE users SET admin_reset_policy = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [policy, authUser.id]
+      );
+    } finally {
+      client.release();
+    }
+
+    return c.redirect("/admin/account");
   });
 
   // --- Service restart API ---

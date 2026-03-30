@@ -1,10 +1,10 @@
-/** Brain users management page. */
+/** User management page. */
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
 import type { LayoutNotification } from "./layout.tsx";
 
-interface BrainUser {
+interface UserRow {
   id: number;
   name: string;
   username: string;
@@ -16,30 +16,47 @@ interface BrainUser {
   created_at: string;
 }
 
+interface DeletedUserRow {
+  id: number;
+  deleted_username: string;
+  deleted_name: string;
+  deleted_at: string;
+}
+
 interface Props {
   user: string;
   isSuperuser?: boolean;
   notifications?: LayoutNotification[];
   version?: string;
-  users: BrainUser[];
+  users: UserRow[];
+  deletedUsers?: DeletedUserRow[];
   currentUserId: number;
   flash?: { type: string; message: string };
 }
 
-export const UsersPage: FC<Props> = ({ user, isSuperuser, notifications, version, users, currentUserId, flash }) => (
-  <Layout title="Brain Users" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
-    <h1 style="font-size:1.5rem; margin-bottom:1rem">Brain Users</h1>
+export const UsersPage: FC<Props> = ({ user, isSuperuser, notifications, version, users, deletedUsers, currentUserId, flash }) => (
+  <Layout title="Users" user={user} isSuperuser={isSuperuser} notifications={notifications} version={version}>
+    <h1 style="font-size:1.5rem; margin-bottom:1rem">Users</h1>
 
     {flash && (
       <div class={`flash flash-${flash.type}`}>{flash.message}</div>
     )}
 
     <div class="card">
-      <h2>MCP Client Users</h2>
-      <p style="font-size:0.875rem; color:#94a3b8; margin-bottom:1rem">
-        Each brain user gets their own isolated set of thoughts. Create users via CLI:
-      </p>
-      <pre class="logs" style="max-height:3rem; margin-bottom:1rem">docker compose exec mcp-server deno run --allow-net --allow-env --allow-read /app/scripts/create-brain-user.ts &lt;name&gt;</pre>
+      <h2>Create User</h2>
+      <form method="POST" action="/admin/users/create" style="display:flex; gap:0.75rem; align-items:flex-end; flex-wrap:wrap">
+        <div class="form-group" style="margin-bottom:0; flex:1; min-width:12rem">
+          <label>Username</label>
+          <input type="text" name="username" pattern="[a-z0-9][a-z0-9-]*" minlength={3} maxlength={100} required placeholder="lowercase, letters/numbers/hyphens" />
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer">
+            <input type="checkbox" name="is_superuser" value="true" />
+            <span style="font-size:0.875rem">Superuser</span>
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary">Create User</button>
+      </form>
     </div>
 
     <div class="card" style="padding:0; overflow-x:auto">
@@ -55,14 +72,14 @@ export const UsersPage: FC<Props> = ({ user, isSuperuser, notifications, version
             <th style="width:5rem">Status</th>
             <th style="width:8rem">Last Active</th>
             <th style="width:8rem">Created</th>
-            <th style="width:10rem">Actions</th>
+            <th style="width:16rem">Actions</th>
           </tr>
         </thead>
         <tbody>
           {users.length === 0 ? (
             <tr>
               <td colspan="10" style="text-align:center; padding:2rem; color:#94a3b8">
-                No brain users yet. Use the CLI to create one.
+                No users yet. Create one above or use the CLI.
               </td>
             </tr>
           ) : (
@@ -104,13 +121,30 @@ export const UsersPage: FC<Props> = ({ user, isSuperuser, notifications, version
                     </button>
                   </form>
                   {bu.id !== currentUserId && (
-                    <form method="POST" action="/admin/users/toggle-superuser" style="margin:0">
-                      <input type="hidden" name="user_id" value={String(bu.id)} />
-                      <input type="hidden" name="is_superuser" value={bu.is_superuser ? "false" : "true"} />
-                      <button type="submit" class="btn btn-ghost" style="padding:0.25rem 0.5rem; font-size:0.75rem">
-                        {bu.is_superuser ? "Revoke Super" : "Make Super"}
-                      </button>
-                    </form>
+                    <>
+                      <form method="POST" action="/admin/users/toggle-superuser" style="margin:0">
+                        <input type="hidden" name="user_id" value={String(bu.id)} />
+                        <input type="hidden" name="is_superuser" value={bu.is_superuser ? "false" : "true"} />
+                        <button type="submit" class="btn btn-ghost" style="padding:0.25rem 0.5rem; font-size:0.75rem">
+                          {bu.is_superuser ? "Revoke Super" : "Make Super"}
+                        </button>
+                      </form>
+                      <form method="POST" action="/admin/users/reset-password" style="margin:0"
+                        onsubmit={`return confirm('Reset password for ${bu.username}? This respects their admin reset policy.')`}>
+                        <input type="hidden" name="user_id" value={String(bu.id)} />
+                        <button type="submit" class="btn btn-ghost" style="padding:0.25rem 0.5rem; font-size:0.75rem">
+                          Reset Password
+                        </button>
+                      </form>
+                      <form method="POST" action="/admin/users/delete" style="margin:0"
+                        onsubmit={`return confirm('Delete ${bu.username}? Their content will be trashed for 30 days then permanently deleted.')`}>
+                        <input type="hidden" name="user_id" value={String(bu.id)} />
+                        <input type="hidden" name="username" value={bu.username} />
+                        <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem">
+                          Delete
+                        </button>
+                      </form>
+                    </>
                   )}
                 </td>
               </tr>
@@ -120,13 +154,48 @@ export const UsersPage: FC<Props> = ({ user, isSuperuser, notifications, version
       </table>
     </div>
 
-    <div class="card" style="margin-top:1rem">
-      <h2>Legacy Mode</h2>
-      <p style="font-size:0.875rem; color:#94a3b8">
-        If <code>MCP_ACCESS_KEY</code> is set in your .env, it acts as a global key with no user scoping.
-        Thoughts captured with the global key have no user_id and are visible to all admin users.
-        For multi-user isolation, create brain users instead.
-      </p>
-    </div>
+    {deletedUsers && deletedUsers.length > 0 && (
+      <div class="card" style="padding:0; overflow-x:auto; margin-top:1rem">
+        <div style="padding:1rem 1.25rem">
+          <h2>Deleted Accounts (within 30-day retention)</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:3rem">ID</th>
+              <th>Original Username</th>
+              <th>Original Name</th>
+              <th>Deleted At</th>
+              <th style="width:6rem">Days Left</th>
+              <th style="width:8rem">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {deletedUsers.map((du) => {
+              const daysLeft = Math.max(0, 30 - Math.floor((Date.now() - new Date(du.deleted_at).getTime()) / (1000 * 60 * 60 * 24)));
+              return (
+                <tr>
+                  <td style="color:#64748b">{du.id}</td>
+                  <td style="font-weight:600">{du.deleted_username}</td>
+                  <td style="color:#94a3b8">{du.deleted_name}</td>
+                  <td style="color:#94a3b8; font-size:0.8rem">{new Date(du.deleted_at).toLocaleDateString()}</td>
+                  <td>
+                    <span class={`badge ${daysLeft <= 7 ? "badge-red" : "badge-yellow"}`}>{daysLeft}d</span>
+                  </td>
+                  <td>
+                    <form method="POST" action="/admin/users/restore" style="margin:0">
+                      <input type="hidden" name="user_id" value={String(du.id)} />
+                      <button type="submit" class="btn btn-primary" style="padding:0.25rem 0.5rem; font-size:0.75rem">
+                        Restore
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
   </Layout>
 );
