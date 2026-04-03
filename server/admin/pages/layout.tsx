@@ -35,6 +35,7 @@ export const Layout: FC<{
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — Local Brain</title>
+      <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237c3aed'/%3E%3Cstop offset='100%25' stop-color='%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='32' r='30' fill='%230f172a'/%3E%3Cpath d='M32 12c-8 0-14 5-14 12 0 3 1 5.5 3 7.5-1.5 2-2 4.5-2 7 0 5.5 4.5 10 10 11.5.8.2 1.5-.4 1.5-1.2v-3.3c0-.5-.3-1-.7-1.2C26.5 43 24 40 24 36.5c0-2.5 1-4.5 3-6l1-.8-.7-1c-1.5-1.8-2.3-3.7-2.3-6.2C25 17.2 28.2 14 32 14s7 3.2 7 8.5c0 2.5-.8 4.4-2.3 6.2l-.7 1 1 .8c2 1.5 3 3.5 3 6 0 3.5-2.5 6.5-5.8 7.8-.4.2-.7.7-.7 1.2v3.3c0 .8.7 1.4 1.5 1.2C40.5 48.5 45 44 45 38.5c0-2.5-.5-5-2-7 2-2 3-4.5 3-7.5 0-7-6-12-14-12z' fill='url(%23g)'/%3E%3Cpath d='M29 24c0-1.7 1.3-3 3-3s3 1.3 3 3-1.3 3-3 3-3-1.3-3-3z' fill='url(%23g)'/%3E%3Cpath d='M32 29v12' stroke='url(%23g)' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
       <style>{`
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
