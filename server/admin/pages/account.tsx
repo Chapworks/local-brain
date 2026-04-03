@@ -109,15 +109,15 @@ create-user.ts ${user} --promote`}</pre>
         </p>
         <form method="POST" action="/admin/account/reset-policy">
           <div class="form-group">
-            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
+            <label style="display:flex; align-items:flex-start; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
               <input type="radio" name="admin_reset_policy" value="reset_full" checked={adminResetPolicy === "reset_full"} />
               <span><strong>Reset, Keep Content</strong> — An admin can reset your password and your data stays.</span>
             </label>
-            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
+            <label style="display:flex; align-items:flex-start; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
               <input type="radio" name="admin_reset_policy" value="reset_lossy" checked={adminResetPolicy === "reset_lossy"} />
               <span><strong>Reset, Lose Content</strong> — An admin can reset your password, but your thoughts are deleted.</span>
             </label>
-            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
+            <label style="display:flex; align-items:flex-start; gap:0.5rem; cursor:pointer; margin-bottom:0.5rem">
               <input type="radio" name="admin_reset_policy" value="none" checked={adminResetPolicy === "none"} />
               <span><strong>No Reset</strong> — Nobody can reset your password. If you lose access, it's gone.</span>
             </label>

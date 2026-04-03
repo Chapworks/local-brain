@@ -13,6 +13,7 @@ COPY server/import-parsers.ts ./
 COPY server/usage.ts ./
 COPY server/user-scope.ts ./
 COPY server/notifications.ts ./
+COPY server/crypto-utils.ts ./
 COPY server/admin/ ./admin/
 COPY server/scripts/ ./scripts/
 
